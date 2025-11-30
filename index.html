@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>感情熱力学モデル - 19粒子6層構造</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+            background: #050510;
+            color: #e5e5f7; 
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        .stats-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            min-width: 250px;
+            z-index: 10;
+        }
+        .stats-panel h2 {
+            color: #FFD700;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .stat-row {
+            margin: 8px 0;
+        }
+        .stat-label {
+            color: #AAA;
+        }
+        .stat-value {
+            color: #FFD700;
+            font-weight: bold;
+        }
+        .weather-display {
+            font-size: 32px;
+            text-align: center;
+            margin: 10px 0;
+        }
+        .legend-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 12px;
+            max-width: 400px;
+            z-index: 10;
+        }
+        .legend-item {
+            margin: 5px 0;
+        }
+        .color-box {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+
+        /* Styles for the restored footer */
+        #fixed-footer {
+            position: fixed; 
+            bottom: 0; 
+            left: 50%;
+            transform: translateX(-50%); 
+            z-index: 50; /* Higher than panels */
+            padding: 1rem;
+            color: white; 
+            background: rgba(17, 24, 39, 0.95);
+            border-radius: 0.5rem 0.5rem 0 0;
+            box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.7);
+            max-width: 95vw;
+            width: 750px; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: transform 0.3s ease-in-out, max-height 0.3s ease-in-out, padding 0.3s ease-in-out, opacity 0.3s ease-in-out; 
+            max-height: 90vh; 
+            overflow-y: auto;
+        }
+        
+        #fixed-footer.collapsed {
+            transform: translate(-50%, calc(100% - 40px)); 
+            max-height: 40px; 
+            padding: 0 1rem; 
+        }
+        
+        #fixed-footer.collapsed #footer-content {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+        
+        #fixed-footer #footer-content {
+            transition: opacity 0.3s;
+        }
+
+        #toggle-button {
+            position: fixed;
+            bottom: 38px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(17, 24, 39, 0.95);
+            border-radius: 12px;
+            padding: 6px 14px;
+            font-size: 18px;
+            line-height: 20px;
+            cursor: pointer;
+            z-index: 60;
+            transition: background 0.12s, transform 0.12s;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 18px rgba(2,6,23,0.6);
+            color: white; /* Make the icon visible */
+        }
+        #toggle-button:hover { transform: translateX(-50%) translateY(-2px); }
+
+        .emotion-button {
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+            font-weight: bold;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+        }
+        .emotion-button:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .emotion-button.active {
+            filter: brightness(1.2);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+        }
+        /* Adding basic button colors since Tailwind is gone */
+        #joy { background-color: #ec4899; color: white; }
+        #anger { background-color: #dc2626; color: white; }
+        #sadness { background-color: #2563eb; color: white; }
+        #calm { background-color: #16a34a; color: white; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <div class="stats-panel">
+        <h2>感情熱力学モデル</h2>
+        <div class="stat-row">
+            <span class="stat-label">核輝度:</span>
+            <span class="stat-value" id="luminosity">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">磁気質量:</span>
+            <span class="stat-value" id="magnetic-mass">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">総ポテンシャル(Sn):</span>
+            <span class="stat-value" id="system-potential">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">動的次元(n):</span>
+            <span class="stat-value" id="dynamic-dimension">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">安定定数(πn):</span>
+            <span class="stat-value" id="pi-n">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">熱力学密度(ρn):</span>
+            <span class="stat-value" id="rho-n">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">オーラ天気:</span>
+        </div>
+        <div class="weather-display" id="weather">喜</div>
+        <div class="stat-row">
+            <span class="stat-label">平均温度:</span>
+            <span class="stat-value" id="avg-temp">0.000</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">平均ストレス:</span>
+            <span class="stat-value" id="avg-stress">0.000</span>
+        </div>
+
+        <hr style="margin: 10px 0; border-color: #444;">
+        <div class="stat-row"><span class="stat-label">[L0] 引力:</span><span class="stat-value" id="debug-l0-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L0] 斥力:</span><span class="stat-value" id="debug-l0-boundary">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L1] 引力:</span><span class="stat-value" id="debug-l1-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L1] 斥力:</span><span class="stat-value" id="debug-l1-boundary">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L2] 引力:</span><span class="stat-value" id="debug-l2-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L2] 斥力:</span><span class="stat-value" id="debug-l2-boundary">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L3] 引力:</span><span class="stat-value" id="debug-l3-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L3] 斥力:</span><span class="stat-value" id="debug-l3-boundary">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L4] 引力:</span><span class="stat-value" id="debug-l4-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L4] 斥力:</span><span class="stat-value" id="debug-l4-boundary">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L5] 引力:</span><span class="stat-value" id="debug-l5-central">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">[L5] 斥力:</span><span class="stat-value" id="debug-l5-boundary">0.000</span></div>
+    </div>
+
+    <div class="legend-panel">
+        <div class="legend-item">
+            <span class="color-box" style="background: #FFFFAA;"></span>核層（光体）- 悩・怒・好
+        </div>
+        <div class="legend-item">
+            <span class="color-box" style="background: #FF8844;"></span>身体層（気体）- 哀・激・楽
+        </div>
+        <div class="legend-item">
+            <span class="color-box" style="background: #44DDFF;"></span>思考層（液体）- 嫌・活・融
+        </div>
+        <div class="legend-item">
+            <span class="color-box" style="background: #888888;"></span>文明層（固体）- 圧・喜・笑
+        </div>
+        <div class="legend-item">
+            <span class="color-box" style="background: #88DDAA;"></span>外部接合層（液体）- 調・変・静
+        </div>
+        <div class="legend-item">
+            <span class="color-box" style="background: #CCCCFF;"></span>外部雰囲気層（気体）- 観・響・隔
+        </div>
+    </div>
+
+    <div id="fixed-footer" class="collapsed">
+        <div id="footer-content" style="display: flex; flex-direction: column; align-items: center; width: 100%; padding: 1rem;">
+            <h1 style="font-size: 1.25rem; font-weight: bold; color: #5eead4; margin-bottom: 0.5rem;">感情球体モデル コントロール</h1>
+
+            <div style="margin-top: 0.5rem; text-align: center;">
+                <h2 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #f3f4f6;">外部オーラ (Aura G: カリスマ入力)</h2>
+                <div id="emotion-controls" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem;">
+                    <button id="joy" class="emotion-button">喜 (Joy)</button>
+                    <button id="anger" class="emotion-button">怒 (Anger)</button>
+                    <button id="sadness" class="emotion-button">哀 (Sadness)</button>
+                    <button id="calm" class="emotion-button active">楽 (Calm)</button>
+                </div>
+            </div>
+    
+            <div id="input-prompt-section" style="padding: 1rem; border-top: 1px solid #4b5563; margin-top: 1rem; width: 100%;">
+                <h3 style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">AIパラメータ入力 (TOON形式)</h3>
+                <textarea id="json-input-area" rows="4" style="width: 100%; padding: 0.5rem; font-size: 0.75rem; background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.25rem;" placeholder="system_parameters:\n  T_activity_avg: 0.7\n  M_inertia_avg: 0.5\n  S_load_avg: 0.3\nexternal_field_analysis:\n  polarity: attractive\n  strength: 0.8"></textarea>
+                <button id="apply-prompt-button" style="width: 100%; margin-top: 0.5rem; padding: 0.25rem 0; background-color: #4f46e5; border-radius: 0.25rem; color: white; font-size: 0.875rem; font-weight: 600;">
+                    パラメータをシミュレーションに適用
+                </button>
+                <p id="input-status-message" style="margin-top: 0.5rem; font-size: 0.75rem; text-align: center; color: #facc15;">
+                    // ステータスが表示されます
+                </p>
+            </div>
+        </div>
+    </div>
+    <button id="toggle-button" aria-controls="footer-content" aria-expanded="false">
+        <span id="toggle-icon">▲</span>
+    </button>
+
+    <script src="visuals.js"></script>
+    <script src="system_core.js"></script>
+    <script src="particle.js"></script>
+    <script src="emotion_graph.js"></script>
+</body>
+</html>
