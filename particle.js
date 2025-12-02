@@ -311,10 +311,12 @@ class CoreParticle extends Particle {
         // 2. 自身の状態更新
         // 2a. 質量(massEff)を動的に計算 (旧CoreLightのロジックを移植)
         if (globalParams.Gamma_n_by_layer && globalParams.Gamma_n_by_layer.length > 0) {
-            const avgGamma = globalParams.Gamma_n_by_layer.reduce((s,v) => s+v, 0) / globalParams.Gamma_n_by_layer.length;
+            // G-Forceの源泉を「全層平均」から「核層(L0)の状態」に修正 (哲学的一貫性のため)
+            const gamma_L0 = globalParams.Gamma_n_by_layer[0];
+
             const G_MIN = 2.0;
             const K_RESPONSE = 50.0;
-            this.massEff = G_MIN + K_RESPONSE * avgGamma;
+            this.massEff = G_MIN + K_RESPONSE * gamma_L0;
             this.massEff = Math.min(20.0, this.massEff); // 上限を設定
         }
 
