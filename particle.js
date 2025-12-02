@@ -117,12 +117,31 @@ class Particle {
         const releaseRate = this.name === '楽' ? 0.15 : 0.1;
         const stressReleased = this.stress * releaseRate;
         this.stress *= (1 - releaseRate);
+        
+        // --- 熱伝導の計算 (可逆的・入れ子構造) ---
+        const K_Cond = 0.08; // 層間熱伝導係数
+        let heatTransfer = 0;
 
+        if (this.layer === 0) {
+            // L0粒子: 光源との熱交換
+            const T_Source = core.temperature;
+            heatTransfer = K_Cond * (T_Source - this.temperature);
+        } else {
+            // L1-L5粒子: 内側層との熱交換
+            const T_avg_inner = globalParams.avg_temp_by_layer[this.layer - 1];
+            heatTransfer = K_Cond * (T_avg_inner - this.temperature);
+        }
+
+        if (this.layer === 5) {
+            // L5粒子: 外部環境との熱交換も追加
+            const K_Env = 0.003;
+            heatTransfer += K_Env * (T_env - this.temperature);
+        }
+        
         const speedFactor = 0.02 * (this.velocity.length() - (this.type === 'drive' ? 0.8 : (this.type === 'flow' ? 0.9 : 1.05)));
-        const envCooling = 0.15 * (this.temperature - T_env);
         const stressHeating = 0.3 * stressReleased;
 
-        this.temperature += (speedFactor - envCooling + stressHeating) * dt;
+        this.temperature += (speedFactor + heatTransfer + stressHeating) * dt;
         this.temperature = Math.max(0, Math.min(1.5, this.temperature));
         this.massEff = this.mBase * (1.0 + 0.5 * this.temperature + 0.3 * this.stress);
 
@@ -134,7 +153,7 @@ class Particle {
         const G_eff = 0.20 * globalParams.Gamma_n_by_layer[this.layer];
         const toCoreDir = core.position.clone().sub(this.position);
         const toCoreDist = toCoreDir.length();
-        const centralForceMagnitude = (toCoreDist > 0.1) ? (G_eff * core.magneticMass * 1.2 / toCoreDist) : 0;
+        const centralForceMagnitude = (toCoreDist > 0.1) ? (G_eff * core.massEff * 1.2 / toCoreDist) : 0;
         const centralForce = toCoreDir.normalize().multiplyScalar(centralForceMagnitude);
         force.add(centralForce);
         this.debug_centralForce = centralForce.length(); // Store for UI
@@ -231,8 +250,64 @@ class Particle {
         this.mesh.material.emissive.copy(auraColor);
         this.mesh.material.emissiveIntensity = 0.2 + 0.8 * this.temperature; // 温度で明度を調整
 
-        const baseScale = 0.8 + 0.4 * this.massEff;
+        const baseScale = 0.4 + 0.2 * this.massEff; // 係数を調整してサイズを縮小
         const finalScale = baseScale * LAYER_SCALE_FACTORS[this.layer];
         this.mesh.scale.setScalar(finalScale);
+    }
+}
+
+// ===== コア粒子「光源」の実装 =====
+class CoreParticle extends Particle {
+    constructor(scene) {
+        const config = { name: '光源', type: 'core', color: 0xFFFFAA };
+        // CoreParticleは特定の層に属さないが、便宜上 layer 0 として扱う
+        // 半径は0で、位置は常に原点
+        super(config, 0, 0, 0, scene);
+
+        this.position.set(0, 0, 0);
+        this.velocity.set(0, 0, 0);
+        this.temperature = 1.2; // 常に高温
+        this.stress = 0;
+        this.massEff = 2.0; // 初期値。動的に更新される
+
+        // メッシュの調整
+        this.mesh.material.emissiveIntensity = 1.0;
+        this.mesh.material.opacity = 0.9;
+        this.mesh.scale.setScalar(1.5); // サイズを少し縮小
+
+        // ポイントライトを追加して光源としての役割を強調
+        this.light = new THREE.PointLight(0xFFFFAA, 2, 100);
+        this.light.castShadow = true;
+        this.mesh.add(this.light); // メッシュの子として追加
+
+        // ラベルは不要なので削除
+        scene.remove(this.label);
+        this.label = null;
+    }
+
+    update(dt, allParticles, core, globalParams) {
+        // 1. 位置は常に原点に固定
+        this.position.set(0, 0, 0);
+        this.mesh.position.copy(this.position);
+
+        // 2. 自身の状態更新
+        // 2a. 質量(massEff)を動的に計算 (旧CoreLightのロジックを移植)
+        if (globalParams.Gamma_n_by_layer && globalParams.Gamma_n_by_layer.length > 0) {
+            const avgGamma = globalParams.Gamma_n_by_layer.reduce((s,v) => s+v, 0) / globalParams.Gamma_n_by_layer.length;
+            const G_MIN = 2.0;
+            const K_RESPONSE = 50.0;
+            this.massEff = G_MIN + K_RESPONSE * avgGamma;
+            this.massEff = Math.min(20.0, this.massEff); // 上限を設定
+        }
+
+        // 2b. 温度と輝度を更新
+        if (allParticles.length > 0) {
+            const avgTemp = allParticles.reduce((sum, p) => sum + p.temperature, 0) / allParticles.length;
+            this.temperature = 1.0 + avgTemp * 0.5;
+        }
+        this.mesh.material.emissiveIntensity = 0.8 + this.temperature * 0.2;
+        this.light.intensity = this.temperature * 2;
+
+        // 3. 熱源としての機能は、L0粒子がCoreParticleの温度を参照する形で実装されたため、ここでの一括処理は不要。
     }
 }

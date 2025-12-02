@@ -85,24 +85,35 @@ function updateGlobalDDD(particles, globalParams) {
     const b = layerEnergies.reduce((s, val) => s + val, 0) / (layerEnergies.filter(v => v > 0).length || 1);
 
     // 2. S_n, π_n, V_n, ρ_n, Γ_n を層ごとに計算
-    let S_n = 0;
+    let S_n_total = 0; // 総ポテンシャルは別途計算
     const new_pi_n = [];
     const new_rho_n = [];
     const new_Gamma_n = [];
 
-    const Sn_coeffs = [a + 3 * b, 3 * c, 3 * d, 3 * e, 3 * f, 3 * g];
+    // 2-1. ポテンシャルS_nを連鎖構造で計算
+    // S_n = S_{n-1} + 3 * (layer_energy) の構造を実装
+    const Sn_values = [];
+    Sn_values[0] = a + 3 * b; // S_2
+    Sn_values[1] = Sn_values[0] + 3 * c; // S_3
+    Sn_values[2] = Sn_values[1] + 3 * d; // S_4
+    Sn_values[3] = Sn_values[2] + 3 * e; // S_5
+    Sn_values[4] = Sn_values[3] + 3 * f; // S_6
+    Sn_values[5] = Sn_values[4] + 3 * g; // S_7
+    S_n_total = Sn_values[5]; // S_7に相当するものが総ポテンシャル
 
+    // 2-2. 各層のπ_n, ρ_n, Γ_nを計算
     for (let i = 0; i < 6; i++) {
         const n = layerDefs[i].n;
-        S_n += Sn_coeffs[i];
+        const S_n_local = Sn_values[i]; // 各層固有のポテンシャルを使用
         
-        const pi_n_numerator = 22 * S_n + 3 * b;
-        const pi_n_denominator = 7 * S_n + b;
+        // SPEC.mdの確定式 (22*S_n + 3*b) / (7*S_n + b) を使用
+        const pi_n_numerator = 22 * S_n_local + 3 * b; // 3(7S_n+b)+S_n を展開した形
+        const pi_n_denominator = 7 * S_n_local + b; // 
         const pi_n = (pi_n_denominator !== 0) ? pi_n_numerator / pi_n_denominator : 3.14;
         new_pi_n.push(pi_n);
 
         const vol_n = V_n(n, pi_n);
-        const rho_n = (n > 0) ? vol_n / (n * n) : 0;
+        const rho_n = (n > 0) ? vol_n / (n * n) : 0; // SPEC.mdに従い V_n / n^2 を維持
         new_rho_n.push(rho_n);
         
         const Gamma_n = Math.log(1 + rho_n);
@@ -113,8 +124,8 @@ function updateGlobalDDD(particles, globalParams) {
     globalParams.pi_n_by_layer = new_pi_n;
     globalParams.rho_n_by_layer = new_rho_n;
     globalParams.Gamma_n_by_layer = new_Gamma_n;
-    globalParams.pi_n_average = new_pi_n.reduce((s, v) => s + v, 0) / new_pi_n.length;
-    globalParams.systemPotential_Sn_total = S_n;
+    globalParams.pi_n_average = new_pi_n.reduce((s, v) => s + v, 0) / (new_pi_n.length || 1);
+    globalParams.systemPotential_Sn_total = S_n_total;
 
     // 4. 季節と「内部」オーラの決定
     const l5Particles = layerDefs[5].particles;
@@ -144,6 +155,7 @@ function updateGlobalDDD(particles, globalParams) {
 
 
 // ===== 中心核「光」の実装 =====
+// このクラスはCoreParticleに置き換えられたため、現在は使用されていません。
 class CoreLight {
     constructor(scene) {
         this.position = new THREE.Vector3(0, 0, 0);

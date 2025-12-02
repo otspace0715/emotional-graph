@@ -29,7 +29,7 @@ const LAYERS = [
 
 // ===== Global variables =====
 let scene, camera, renderer;
-let core, particles = [], weather, externalAuraCloud;
+let particles = [], weather, externalAuraCloud;
 
 const globalParams = {
   // Physics parameters
@@ -43,7 +43,10 @@ const globalParams = {
   systemPotential_Sn_total: 0,
   season: "冬", auraWeather: "楽", internalAuraWeather: "楽",
   coreMagneticMass: 2.0,
-  externalAuraVisible: true
+  externalAuraVisible: true,
+  dominantEmotion: "---",
+  pi_n_average: 0,
+  avg_temp_by_layer: [] // 層ごとの平均温度を格納
 };
 let lastTime = Date.now();
 
@@ -61,7 +64,6 @@ function init() {
     document.getElementById('container').appendChild(renderer.domElement);
 
     drawLayerBoundaries();
-    core = new CoreLight(scene);
     weather = new AuraWeather(scene);
     externalAuraCloud = new ExternalAuraCloud(scene); // Add this line
     createParticles();
@@ -113,6 +115,10 @@ function createParticles() {
             particles.push(new Particle(config, idx, initialRadius, baseRadius, scene));
         });
     });
+
+    // 19番目の粒子「光体」を生成し、配列の先頭に追加
+    const coreParticle = new CoreParticle(scene);
+    particles.unshift(coreParticle);
 }
 
 function setupMouseControls() {
@@ -161,6 +167,13 @@ function setupEmotionControls() {
 
             if (button.id === 'no-aura') {
                 globalParams.externalAuraVisible = false;
+                // 外部オーラの影響を物理的に無効化する
+                const neutral_T = 0.6;
+                const neutral_S = 0.0;
+                globalParams.T_env = neutral_T;
+                globalParams.globalExternalStress = neutral_S;
+                globalParams.display_T_env = neutral_T;
+                globalParams.display_GlobalStress = neutral_S;
             } else {
                 globalParams.externalAuraVisible = true;
                 let T = 0.6, S = 0.0;
@@ -234,14 +247,40 @@ function animate() {
     // Decay the physics stress, but not the display stress
     globalParams.globalExternalStress = Math.max(0, globalParams.globalExternalStress * (1 - 2.5 * dt));
 
+    // 層ごとの平均温度を計算してglobalParamsに格納
+    const avgTemps = [];
+    for (let i = 0; i < 6; i++) {
+        const layerParticles = particles.filter(p => p.layer === i && !(p instanceof CoreParticle));
+        if (layerParticles.length > 0) {
+            avgTemps[i] = layerParticles.reduce((sum, p) => sum + p.temperature, 0) / layerParticles.length;
+        } else {
+            avgTemps[i] = 0.5; // 粒子がいない場合はデフォルト値
+        }
+    }
+    globalParams.avg_temp_by_layer = avgTemps;
+
     updateGlobalDDD(particles, globalParams);
-    core.update(particles, globalParams);
-    globalParams.coreMagneticMass = core.magneticMass; // legacy
-    particles.forEach(p => p.update(dt, particles, core, globalParams));
+    
+    // 光体（particles[0]）は他の粒子に影響を与えるため、最初に更新
+    // 他の粒子は光体の影響を受けた状態で更新される
+    const coreParticle = particles.find(p => p instanceof CoreParticle);
+    particles.forEach(p => p.update(dt, particles, coreParticle, globalParams));
+
     weather.update(globalParams);
     
     externalAuraCloud.setVisible(globalParams.externalAuraVisible);
     externalAuraCloud.update(globalParams);
+
+    // 支配的感情の決定ロジック (最もストレスが高い粒子)
+    if (particles.length > 0) {
+        // 光体は除外して計算
+        const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
+        const dominantParticle = nonCoreParticles.reduce((maxP, p) => p.stress > maxP.stress ? p : maxP, nonCoreParticles[0]);
+        globalParams.dominantEmotion = dominantParticle.name;
+    } else {
+        globalParams.dominantEmotion = "---";
+    }
+
 
     updateUI();
     camera.lookAt(0, 0, 0);
@@ -249,27 +288,41 @@ function animate() {
 }
 
 function updateUI() {
-    const { pi_n_by_layer, rho_n_by_layer, Gamma_n_by_layer, systemPotential_Sn_total, season, internalAuraWeather } = globalParams;
-    
-    document.getElementById('luminosity').textContent = core.luminosity.toFixed(3);
-    document.getElementById('magnetic-mass').textContent = core.magneticMass.toFixed(3);
+    const { pi_n_by_layer, rho_n_by_layer, Gamma_n_by_layer, systemPotential_Sn_total, season, internalAuraWeather, pi_n_average, dominantEmotion } = globalParams;
+    const coreParticle = particles.find(p => p instanceof CoreParticle);
+
+    if (coreParticle) {
+        document.getElementById('luminosity').textContent = coreParticle.temperature.toFixed(3);
+        document.getElementById('magnetic-mass').textContent = coreParticle.massEff.toFixed(3);
+    }
+
     document.getElementById('system-potential').textContent = (systemPotential_Sn_total || 0).toFixed(3);
 
-    const avgTemp = particles.length > 0 ? particles.reduce((sum, p) => sum + p.temperature, 0) / particles.length : 0;
-    const avgStress = particles.length > 0 ? particles.reduce((sum, p) => sum + p.stress, 0) / particles.length : 0;
+    const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
+    const avgTemp = nonCoreParticles.length > 0 ? nonCoreParticles.reduce((sum, p) => sum + p.temperature, 0) / nonCoreParticles.length : 0;
+    const avgStress = nonCoreParticles.length > 0 ? nonCoreParticles.reduce((sum, p) => sum + p.stress, 0) / nonCoreParticles.length : 0;
     document.getElementById('avg-temp').textContent = avgTemp.toFixed(3);
     document.getElementById('avg-stress').textContent = avgStress.toFixed(3);
+    document.getElementById('avg-pi-n').textContent = (globalParams.pi_n_average || 0).toFixed(4);
+    document.getElementById('dominant-emotion').textContent = dominantEmotion;
 
     // Determine display weather from display params
     let displayAuraWeather;
-    if (globalParams.display_GlobalStress > 1.0) displayAuraWeather = '怒';
-    else if (globalParams.display_T_env >= 0.7 && globalParams.display_GlobalStress <= 0.6) displayAuraWeather = '喜';
-    else if (globalParams.display_T_env <= 0.45 && globalParams.display_GlobalStress <= 0.3) displayAuraWeather = '哀';
-    else displayAuraWeather = '楽';
+    let weatherColor = '#87CEEB'; // Default color for '楽'
+
+    if (!globalParams.externalAuraVisible) {
+        displayAuraWeather = '無し';
+        weatherColor = '#999'; // Neutral color for "None"
+    } else {
+        if (globalParams.display_GlobalStress > 1.0) { displayAuraWeather = '怒'; weatherColor = '#FF6347'; }
+        else if (globalParams.display_T_env >= 0.7 && globalParams.display_GlobalStress <= 0.6) { displayAuraWeather = '喜'; weatherColor = '#FFD700'; }
+        else if (globalParams.display_T_env <= 0.45 && globalParams.display_GlobalStress <= 0.3) { displayAuraWeather = '哀'; weatherColor = '#9370DB'; }
+        else { displayAuraWeather = '楽'; weatherColor = '#87CEEB'; }
+    }
 
     const weatherEl = document.getElementById('weather');
     weatherEl.textContent = `${displayAuraWeather}`;
-    weatherEl.style.color = displayAuraWeather === '喜' ? '#FFD700' : displayAuraWeather === '楽' ? '#87CEEB' : displayAuraWeather === '哀' ? '#9370DB' : '#FF6347';
+    weatherEl.style.color = weatherColor;
 
     const internalWeatherEl = document.getElementById('internal-weather');
     internalWeatherEl.textContent = `${season}・${internalAuraWeather}`;
