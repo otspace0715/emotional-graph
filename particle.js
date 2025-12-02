@@ -13,18 +13,18 @@ const LAYER_SCALE_FACTORS = [
 
 // ===== Particle クラス =====
 class Particle {
-    constructor(config, layerIndex, layerRadius, scene) {
+    constructor(config, layerIndex, initialRadius, baseLayerRadius, scene) {
         this.name = config.name;
         this.type = config.type;
         this.layer = layerIndex;
-        this.baseRadius = layerRadius;
+        this.baseRadius = baseLayerRadius;
         
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.random() * Math.PI;
         this.position = new THREE.Vector3(
-            layerRadius * Math.sin(phi) * Math.cos(theta),
-            layerRadius * Math.sin(phi) * Math.sin(theta),
-            layerRadius * Math.cos(phi)
+            initialRadius * Math.sin(phi) * Math.cos(theta),
+            initialRadius * Math.sin(phi) * Math.sin(theta),
+            initialRadius * Math.cos(phi)
         );
         
         const radial = this.position.clone().normalize();
@@ -37,6 +37,10 @@ class Particle {
         this.mBase = 1.0;
         this.massEff = 1.0;
         
+        // Debug properties
+        this.debug_centralForce = 0;
+        this.debug_boundaryForce = 0;
+
         // 層による温度補正（外部層ほど高温に初期化）
         const layerTempBoost = 0; // layerIndex >= 4 ? 0.2 : 0;
         
@@ -87,159 +91,146 @@ class Particle {
     }
     
     update(dt, particles, core, globalParams) {
-        const { T_env, coreMagneticMass } = globalParams;
-        
+        // globalParamsの存在をチェック
+        if (!globalParams.Gamma_n_by_layer || globalParams.Gamma_n_by_layer.length === 0 ||
+            !globalParams.pi_n_by_layer || globalParams.pi_n_by_layer.length === 0) {
+            // console.warn("globalParams not yet initialized for particle update.");
+            return;
+        }
+
+        const { T_env } = globalParams;
+        const force = new THREE.Vector3();
+
+        // ----------------------------------------------------
+        // --- 内部状態の更新（温度、ストレス）
+        // ----------------------------------------------------
         let stressIncrease = 0;
         const distToCenter = this.position.length();
         const boundaryDiff = Math.abs(distToCenter - this.baseRadius);
         if (boundaryDiff > 2) {
             stressIncrease += 0.01 * boundaryDiff;
         }
-        
-        const layerSensitivity = this.layer >= 4 ? 1.8 : 1.0;
-        this.stress += stressIncrease * layerSensitivity;
-        
-        // Add stress from external UI controls
+        this.stress += stressIncrease * (this.layer >= 4 ? 1.8 : 1.0);
         if (globalParams.globalExternalStress && this.layer >= 4) {
             this.stress += globalParams.globalExternalStress * (this.layer / 5) * dt;
         }
-        
         const releaseRate = this.name === '楽' ? 0.15 : 0.1;
         const stressReleased = this.stress * releaseRate;
         this.stress *= (1 - releaseRate);
-        
-        // New physics: Heat from motion based on particle type
-        let equilibriumSpeed = 1.05; // Freeze particles need to move faster to generate heat
-        if (this.type === 'drive') {
-            equilibriumSpeed = 0.8; 
-        } else if (this.type === 'flow') {
-            equilibriumSpeed = 0.9;
-        }
-        // const speedFactor = 0.1 * (this.velocity.length() - equilibriumSpeed); // (修正前)
-        const speedFactor = 0.02 * (this.velocity.length() - equilibriumSpeed); // 熱生成係数を 0.1 から 0.05 に下げて温度の過剰上昇を抑制
 
-        // New physics: Heat retention based on particle type
-        let coolingCoeff = 0.15; // 冷却係数を0.15に均一化
-        const envCooling = coolingCoeff * (this.temperature - T_env);
+        const speedFactor = 0.02 * (this.velocity.length() - (this.type === 'drive' ? 0.8 : (this.type === 'flow' ? 0.9 : 1.05)));
+        const envCooling = 0.15 * (this.temperature - T_env);
         const stressHeating = 0.3 * stressReleased;
-        
-        let heatTransfer = 0;
-        particles.forEach(other => {
-            if (other !== this && Math.abs(other.layer - this.layer) === 1) {
-                const dist = this.position.distanceTo(other.position);
-                if (dist < 5) {
-                    heatTransfer += 0.02 * (other.temperature - this.temperature) / (dist + 1);
-                }
-            }
-        });
-        
-        this.temperature += (speedFactor - envCooling + stressHeating + heatTransfer) * dt;
+
+        this.temperature += (speedFactor - envCooling + stressHeating) * dt;
         this.temperature = Math.max(0, Math.min(1.5, this.temperature));
-        
         this.massEff = this.mBase * (1.0 + 0.5 * this.temperature + 0.3 * this.stress);
-        this.debug_centralForce = 0;
-        this.debug_boundaryForce = 0;
+
+        // ----------------------------------------------------
+        // --- 力の計算 (SPEC.md準拠)
+        // ----------------------------------------------------
         
-        const force = new THREE.Vector3();
-        
+        // 1. 中心核引力 (創発重力) - 1/r 法則に変更
+        const G_eff = 0.20 * globalParams.Gamma_n_by_layer[this.layer];
         const toCoreDir = core.position.clone().sub(this.position);
-        const toCoreDistSq = toCoreDir.lengthSq() + 1;
-        const centralForce = toCoreDir.normalize().multiplyScalar(
-            coreMagneticMass * 5.0 / toCoreDistSq // 係数を0.5から5.0に増やして引力を強化
-        );
+        const toCoreDist = toCoreDir.length();
+        const centralForceMagnitude = (toCoreDist > 0.1) ? (G_eff * core.magneticMass * 1.2 / toCoreDist) : 0;
+        const centralForce = toCoreDir.normalize().multiplyScalar(centralForceMagnitude);
         force.add(centralForce);
-        this.debug_centralForce = centralForce.length();
-        
+        this.debug_centralForce = centralForce.length(); // Store for UI
+
+        // 2. 粒子間相互作用 (斥力・引力)
         particles.forEach(other => {
             if (other === this) return;
-            
             const diff = other.position.clone().sub(this.position);
             const dist = diff.length();
             if (dist < 0.1) return;
-            
             const dir = diff.normalize();
-            
             if (dist < 3) {
-                const repulsion = 20 / Math.pow(dist, 3);
-                force.add(dir.clone().multiplyScalar(-repulsion));
+                force.add(dir.clone().multiplyScalar(-20 / Math.pow(dist, 3)));
             }
-            
             if (Math.abs(other.layer - this.layer) === 1 && dist < 8) {
-                const attraction = 0.3 * this.attractionBias / (dist * dist);
-                force.add(dir.clone().multiplyScalar(attraction));
+                force.add(dir.clone().multiplyScalar(0.3 * this.attractionBias / (dist * dist)));
             }
         });
-        
+
+        // 3. 境界力 (層からの逸脱を防ぐ) - バネモデル + 中心引力補正
         const radialDir = this.position.clone().normalize();
-        // --- (ユーザー指定により修正) ---
-        // 各層に固定された次元 n_p を使用して斥力を計算
         const n_p = LAYER_DIMENSIONS[this.layer];
-        // nが大きいほど境界力が弱まるように係数を調整。基本強度を10.0に設定
-        const boundaryForceFactor = 10.0 / n_p;
-        const boundaryForceScalar = boundaryForceFactor * Math.max(0, 2 - boundaryDiff) * (distToCenter < this.baseRadius ? 1 : -1);
+        const boundaryForceFactor = 5.0 / n_p;
+        const displacement = this.baseRadius - distToCenter; // `distToCenter` is already calculated
+        
+        let boundaryForceScalar = boundaryForceFactor * displacement;
+
+        // 中心引力の半分を、外側への引力(displacement < 0 の場合)に加える
+        if (displacement < 0) {
+            boundaryForceScalar -= 0.5 * centralForceMagnitude;
+        }
+
         const boundaryForceVec = radialDir.multiplyScalar(boundaryForceScalar);
         force.add(boundaryForceVec);
-        this.debug_boundaryForce = boundaryForceVec.length();
+        this.debug_boundaryForce = boundaryForceVec.length(); // Store for UI
 
-        // --- 次元曲率力 (Dimensional Curvature Force) ---
-        // 博士の提案に基づき、粒子を安定した左回転軌道に引き戻す力を導入。
-        // 力の強さは、系の安定定数 π_n に比例する。
-        const { pi_n } = globalParams;
-        if (pi_n > 0) {
-            const rotationAxis = new THREE.Vector3(0, 0, 1); // Z軸を中心とした左回転
-            const targetDir = rotationAxis.clone().cross(this.position).normalize();
-            
-            // 目標とする軌道速度を定義 (基本速度1.5)
-            const targetOrbitalSpeed = 1.5;
-            const targetVelocity = targetDir.multiplyScalar(targetOrbitalSpeed);
+        // 4. 次元曲率力 (F_πn) - SPEC.md Section 5
+        const π_local = globalParams.pi_n_by_layer[this.layer];
+        const axis = new THREE.Vector3(0, 0, 1);
+        const omega_n = 2.8 * Math.exp(-0.65 * this.layer);
+        const v_ideal = new THREE.Vector3().crossVectors(axis, this.position).normalize()
+                          .multiplyScalar(omega_n * this.position.length());
+        const alpha = 1.3 / (1 + 0.7 * this.layer);
+        const F_pi_n = v_ideal.clone().sub(this.velocity)
+                        .multiplyScalar(-alpha * π_local);
+        force.add(F_pi_n);
 
-            // 現在の速度と目標速度の差から、修正ベクトルを計算
-            const velocityDifference = targetVelocity.sub(this.velocity);
-
-            // 修正力は速度差とπ_nに比例する
-            const curvatureForceCoefficient = 0.5; // 秩序を強制する力の係数
-            const curvatureForce = velocityDifference.multiplyScalar(pi_n * curvatureForceCoefficient);
-            
-            force.add(curvatureForce);
-        }
-        
-        const jitterStrength = 0.5 * this.stress;
+        // 5. 量子ゆらぎ (Jitter) - SPEC.md Section 6
+        const gamma_n_local = globalParams.Gamma_n_by_layer[this.layer];
+        // ゼロ除算を避ける
+        const jitterStrength = (gamma_n_local > 0.001) ? 0.055 / gamma_n_local : 0.055 / 0.001;
         force.add(new THREE.Vector3(
             (Math.random() - 0.5) * jitterStrength,
             (Math.random() - 0.5) * jitterStrength,
             (Math.random() - 0.5) * jitterStrength
         ));
-        
+
+        // ----------------------------------------------------
+        // --- 運動の更新
+        // ----------------------------------------------------
         const accel = force.divideScalar(this.massEff);
         this.velocity.add(accel.multiplyScalar(dt));
         
-        const maxSpeed = 2.0 + 0.5 * this.temperature;
-        if (this.velocity.length() > maxSpeed) {
-            this.velocity.normalize().multiplyScalar(maxSpeed);
-        }
+        // 6. 速度上限 (Velocity Clamp) - SPEC.md Section 6
+        this.velocity.clampLength(0, 1.35 * Math.sqrt(this.temperature + 0.05));
         
         this.position.add(this.velocity.clone().multiplyScalar(dt));
         
+        // ----------------------------------------------------
+        // --- 可視化の更新
+        // ----------------------------------------------------
         this.mesh.position.copy(this.position);
-        this.label.position.copy(this.position);
-        this.label.position.y += 2;
+        this.label.position.copy(this.position).add(new THREE.Vector3(0, 2, 0));
         
-        const heatColor = new THREE.Color().setHSL(
-            this.temperature > T_env ? 0.05 : 0.6,
-            0.8,
-            0.4 + 0.3 * this.temperature
-        );
-        this.mesh.material.emissive.copy(heatColor);
-        this.mesh.material.emissiveIntensity = 0.2 + 0.5 * this.temperature;
+        // globalParams.internalAuraWeatherに基づいて色を決定
+        const auraColor = new THREE.Color();
+        switch (globalParams.internalAuraWeather) {
+            case '喜':
+                auraColor.setRGB(1, 0.9, 0.5);
+                break;
+            case '楽':
+                auraColor.setRGB(0.7, 0.9, 1);
+                break;
+            case '哀':
+                auraColor.setRGB(0.5, 0.6, 0.9);
+                break;
+            case '怒':
+                auraColor.setRGB(0.9, 0.3, 0.3);
+                break;
+            default:
+                auraColor.setRGB(0.7, 0.9, 1); // デフォルトは'楽'
+        }
         
-        // --- (修正前) 層ごとのサイズ変更 ---
-        // let scale = 0.8 + 0.4 * this.massEff;
-        // if (this.layer === 0) {
-        //     // scale *= 0.6; // 核層の粒子を60%のサイズにする (修正前)
-        //     scale *= 0.3; // 核層の粒子をさらに小さくする (30%に)
-        // }
-        // this.mesh.scale.setScalar(scale);
-        // --- (修正後) 全層のサイズを倍率で変更 ---
+        this.mesh.material.emissive.copy(auraColor);
+        this.mesh.material.emissiveIntensity = 0.2 + 0.8 * this.temperature; // 温度で明度を調整
+
         const baseScale = 0.8 + 0.4 * this.massEff;
         const finalScale = baseScale * LAYER_SCALE_FACTORS[this.layer];
         this.mesh.scale.setScalar(finalScale);
