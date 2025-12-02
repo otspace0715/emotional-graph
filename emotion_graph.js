@@ -275,11 +275,10 @@ function animate() {
     externalAuraCloud.setVisible(globalParams.externalAuraVisible);
     externalAuraCloud.update(globalParams);
 
-    // 支配的感情の決定ロジック (最もストレスが高い粒子)
+    // 支配的感情の決定ロジック (最も温度が高い粒子) - SPEC.md 4.4準拠
     if (particles.length > 0) {
-        // 光体は除外して計算
-        const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
-        const dominantParticle = nonCoreParticles.reduce((maxP, p) => p.stress > maxP.stress ? p : maxP, nonCoreParticles[0]);
+        // 光源を含む全粒子で計算
+        const dominantParticle = particles.reduce((maxP, p) => p.temperature > maxP.temperature ? p : maxP, particles[0]);
         globalParams.dominantEmotion = dominantParticle.name;
     } else {
         globalParams.dominantEmotion = "---";
