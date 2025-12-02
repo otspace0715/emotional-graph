@@ -46,7 +46,8 @@ const globalParams = {
   externalAuraVisible: true,
   dominantEmotion: "---",
   pi_n_average: 0,
-  avg_temp_by_layer: [] // 層ごとの平均温度を格納
+  avg_temp_by_layer: [], // 層ごとの平均温度を格納
+  avg_stress_by_layer: [] // 層ごとの平均ストレスを格納
 };
 let lastTime = Date.now();
 
@@ -248,16 +249,19 @@ function animate() {
     globalParams.globalExternalStress = Math.max(0, globalParams.globalExternalStress * (1 - 2.5 * dt));
 
     // 層ごとの平均温度を計算してglobalParamsに格納
-    const avgTemps = [];
+    const avgTemps = [], avgStresses = [];
     for (let i = 0; i < 6; i++) {
         const layerParticles = particles.filter(p => p.layer === i && !(p instanceof CoreParticle));
         if (layerParticles.length > 0) {
             avgTemps[i] = layerParticles.reduce((sum, p) => sum + p.temperature, 0) / layerParticles.length;
+            avgStresses[i] = layerParticles.reduce((sum, p) => sum + p.stress, 0) / layerParticles.length;
         } else {
             avgTemps[i] = 0.5; // 粒子がいない場合はデフォルト値
+            avgStresses[i] = 0.1; // 粒子がいない場合はデフォルト値
         }
     }
     globalParams.avg_temp_by_layer = avgTemps;
+    globalParams.avg_stress_by_layer = avgStresses;
 
     updateGlobalDDD(particles, globalParams);
     
