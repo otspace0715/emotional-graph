@@ -35,7 +35,7 @@ class Particle {
         // 提案: 粒子タイプに応じて初期状態を分岐させ、多様性を復活させる
         // 同時に、秋スタートとなるように全体の温度を引き上げる
         // 「楽」を基準点とし、各粒子の特性を再定義
-        // 楽（秋）のターゲット：平均 T ≈ 0.79 (ユーザー提案)
+        // 楽（秋）のターゲット：平均 T ≈ 0.79
         const T_OFFSET = 0.27; 
         switch(this.name) {
             // L0: 核層 (Light) - 根源的意志
@@ -285,6 +285,11 @@ class Particle {
             (Math.random() - 0.5) * jitterStrength,
             (Math.random() - 0.5) * jitterStrength
         ));
+
+        // 6. 運動学的減衰 (F_Damp) - S_7減少問題の最終解決
+        const K_Damp = 0.2; // 減衰係数 (調整可能)
+        const F_Damp = this.velocity.clone().multiplyScalar(-K_Damp);
+        force.add(F_Damp);
 
         // ----------------------------------------------------
         // --- 運動の更新

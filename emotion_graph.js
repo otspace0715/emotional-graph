@@ -293,13 +293,25 @@ function animate() {
     externalAuraCloud.setVisible(globalParams.externalAuraVisible);
     externalAuraCloud.update(globalParams);
 
-    // 支配的感情の決定ロジック (最もストレスが高い粒子) - SPEC.md 3.0準拠
+    // 支配的感情の決定ロジック (有効活動度指数 A_Index が最大の粒子) - 哲学的欠陥修正
     if (particles.length > 0) {
         // 光源を除く18粒子で計算
         const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
-        const dominantParticle = nonCoreParticles.length > 0 ?
-            nonCoreParticles.reduce((maxP, p) => p.stress > maxP.stress ? p : maxP, nonCoreParticles[0]) : particles[0];
-        globalParams.dominantEmotion = dominantParticle.name;
+        
+        let maxActivityIndex = -Infinity;
+        let dominantEmotionName = "---";
+
+        if (nonCoreParticles.length > 0) {
+            nonCoreParticles.forEach(p => {
+                // A_Index = T * (1 - sigma) / m_eff
+                const activityIndex = p.temperature * (1.0 - p.stress) / p.massEff;
+                if (activityIndex > maxActivityIndex) {
+                    maxActivityIndex = activityIndex;
+                    dominantEmotionName = p.name;
+                }
+            });
+        }
+        globalParams.dominantEmotion = dominantEmotionName;
     } else {
         globalParams.dominantEmotion = "---";
     }
