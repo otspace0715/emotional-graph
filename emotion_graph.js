@@ -35,6 +35,7 @@ const globalParams = {
   // Physics parameters
   T_env: 0.6,
   globalExternalStress: 0.0,
+  T_Source: 1.0, // 光源の動的温度を格納する変数を追加
   // Display parameters
   display_T_env: 0.6,
   display_GlobalStress: 0.0,
@@ -45,6 +46,7 @@ const globalParams = {
   coreMagneticMass: 2.0,
   externalAuraVisible: true,
   dominantEmotion: "---",
+  brainwaveState: "---", // 脳波状態を追加
   pi_n_average: 0,
   avg_temp_by_layer: [], // 層ごとの平均温度を格納
   avg_stress_by_layer: [] // 層ごとの平均ストレスを格納
@@ -268,6 +270,22 @@ function animate() {
     // 光体（particles[0]）は他の粒子に影響を与えるため、最初に更新
     // 他の粒子は光体の影響を受けた状態で更新される
     const coreParticle = particles.find(p => p instanceof CoreParticle);
+
+    // 提案: T_Sourceの計算をメインループに移動し、フィードバック遅延を解消
+    if (coreParticle) {
+        const S_Total = globalParams.systemPotential_Sn_total || 0;
+        const S_Ref = 0.5;
+        const T_Base = 1.0;
+        const K_S_Strong = 1.0;
+        let T_Source = T_Base - K_S_Strong * (S_Total - S_Ref);
+        globalParams.T_Source = Math.max(0.1, Math.min(1.5, T_Source));
+        // 光源自体の温度と輝度も更新
+        coreParticle.temperature = globalParams.T_Source;
+        // These were moved from CoreParticle.update
+        coreParticle.mesh.material.emissiveIntensity = 0.8 + coreParticle.temperature * 0.2;
+        coreParticle.light.intensity = coreParticle.temperature * 2;
+    }
+
     particles.forEach(p => p.update(dt, particles, coreParticle, globalParams));
 
     weather.update(globalParams);
@@ -275,15 +293,23 @@ function animate() {
     externalAuraCloud.setVisible(globalParams.externalAuraVisible);
     externalAuraCloud.update(globalParams);
 
-    // 支配的感情の決定ロジック (最も温度が高い粒子) - SPEC.md 4.4準拠
+    // 支配的感情の決定ロジック (最もストレスが高い粒子) - SPEC.md 3.0準拠
     if (particles.length > 0) {
-        // 光源を含む全粒子で計算
-        const dominantParticle = particles.reduce((maxP, p) => p.temperature > maxP.temperature ? p : maxP, particles[0]);
+        // 光源を除く18粒子で計算
+        const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
+        const dominantParticle = nonCoreParticles.length > 0 ?
+            nonCoreParticles.reduce((maxP, p) => p.stress > maxP.stress ? p : maxP, nonCoreParticles[0]) : particles[0];
         globalParams.dominantEmotion = dominantParticle.name;
     } else {
         globalParams.dominantEmotion = "---";
     }
 
+    if (coreParticle) {
+        document.getElementById('luminosity').textContent = coreParticle.temperature.toFixed(3);
+        document.getElementById('magnetic-mass').textContent = coreParticle.massEff.toFixed(3);
+    }
+
+    document.getElementById('system-potential').textContent = (globalParams.systemPotential_Sn_total || 0).toFixed(3);
 
     updateUI();
     camera.lookAt(0, 0, 0);
@@ -291,15 +317,7 @@ function animate() {
 }
 
 function updateUI() {
-    const { pi_n_by_layer, rho_n_by_layer, Gamma_n_by_layer, systemPotential_Sn_total, season, internalAuraWeather, pi_n_average, dominantEmotion } = globalParams;
-    const coreParticle = particles.find(p => p instanceof CoreParticle);
-
-    if (coreParticle) {
-        document.getElementById('luminosity').textContent = coreParticle.temperature.toFixed(3);
-        document.getElementById('magnetic-mass').textContent = coreParticle.massEff.toFixed(3);
-    }
-
-    document.getElementById('system-potential').textContent = (systemPotential_Sn_total || 0).toFixed(3);
+    const { pi_n_by_layer, rho_n_by_layer, Gamma_n_by_layer, systemPotential_Sn_total, season, internalAuraWeather, pi_n_average, dominantEmotion, brainwaveState } = globalParams;
 
     const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
     const avgTemp = nonCoreParticles.length > 0 ? nonCoreParticles.reduce((sum, p) => sum + p.temperature, 0) / nonCoreParticles.length : 0;
@@ -308,6 +326,7 @@ function updateUI() {
     document.getElementById('avg-stress').textContent = avgStress.toFixed(3);
     document.getElementById('avg-pi-n').textContent = (globalParams.pi_n_average || 0).toFixed(4);
     document.getElementById('dominant-emotion').textContent = dominantEmotion;
+    document.getElementById('brainwave-state').textContent = brainwaveState;
 
     // Determine display weather from display params
     let displayAuraWeather;

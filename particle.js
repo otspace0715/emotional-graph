@@ -32,32 +32,62 @@ class Particle {
         const baseSpeed = 0.5 + Math.random() * 0.5;
         this.velocity = tangent.multiplyScalar(baseSpeed);
         
-        this.temperature = 0.5;
-        this.stress = 0.0;
-        this.mBase = 1.0;
-        this.massEff = 1.0;
-        
-        // Debug properties
-        this.debug_centralForce = 0;
-        this.debug_boundaryForce = 0;
+        // 提案: 粒子タイプに応じて初期状態を分岐させ、多様性を復活させる
+        // 同時に、秋スタートとなるように全体の温度を引き上げる
+        // 「楽」を基準点とし、各粒子の特性を再定義
+        // 楽（秋）のターゲット：平均 T ≈ 0.79 (ユーザー提案)
+        const T_OFFSET = 0.27; 
+        switch(this.name) {
+            // L0: 核層 (Light) - 根源的意志
+            case '悩': this.temperature = 0.48 + T_OFFSET; this.stress = 0.28; this.mBase = 1.1;  break; // 0.75
+            case '怒': this.temperature = 0.60 + T_OFFSET; this.stress = 0.25; this.mBase = 0.9;  break; // 0.87
+            case '好': this.temperature = 0.55 + T_OFFSET; this.stress = 0.15; this.mBase = 1.0;  break; // 0.82
 
-        // 層による温度補正（外部層ほど高温に初期化）
-        const layerTempBoost = 0; // layerIndex >= 4 ? 0.2 : 0;
-        
+            // L1: 身体層 (Gas) - 本能・生理的反応
+            case '哀': this.temperature = 0.45 + T_OFFSET; this.stress = 0.26; this.mBase = 1.15; break; // 0.72
+            case '激': this.temperature = 0.58 + T_OFFSET; this.stress = 0.22; this.mBase = 0.95; break; // 0.85
+            case '楽': this.temperature = 0.52 + T_OFFSET; this.stress = 0.10; this.mBase = 1.0;  break; // 0.79 (基準点)
+
+            // L2: 思考層 (Liquid) - 認知プロセス
+            case '嫌': this.temperature = 0.47 + T_OFFSET; this.stress = 0.27; this.mBase = 1.1;  break; // 0.74
+            case '活': this.temperature = 0.56 + T_OFFSET; this.stress = 0.18; this.mBase = 0.95; break; // 0.83
+            case '融': this.temperature = 0.53 + T_OFFSET; this.stress = 0.12; this.mBase = 1.0;  break; // 0.80
+
+            // L3: 文明層 (Solid) - 社会的規範・責任
+            case '圧': this.temperature = 0.46 + T_OFFSET; this.stress = 0.30; this.mBase = 1.2;  break; // 0.73
+            case '喜': this.temperature = 0.57 + T_OFFSET; this.stress = 0.16; this.mBase = 0.9;  break; // 0.84
+            case '笑': this.temperature = 0.54 + T_OFFSET; this.stress = 0.14; this.mBase = 1.0;  break; // 0.81
+
+            // L4: 外部接合層 (Liquid) - 他者・環境との境界調整
+            case '静': this.temperature = 0.49 + T_OFFSET; this.stress = 0.20; this.mBase = 1.05; break; // 0.76
+            case '変': this.temperature = 0.55 + T_OFFSET; this.stress = 0.17; this.mBase = 0.95; break; // 0.82
+            case '調': this.temperature = 0.51 + T_OFFSET; this.stress = 0.11; this.mBase = 1.0;  break; // 0.78
+
+            // L5: 外部雰囲気層 (Gas) - オーラ・場の拡散
+            case '隔': this.temperature = 0.50 + T_OFFSET; this.stress = 0.24; this.mBase = 1.0;  break; // 0.77
+            case '響': this.temperature = 0.54 + T_OFFSET; this.stress = 0.19; this.mBase = 0.9;  break; // 0.81
+            case '観': this.temperature = 0.52 + T_OFFSET; this.stress = 0.13; this.mBase = 1.0;  break; // 0.79
+
+            default: // フォールバック
+                this.temperature = 0.77; this.stress = 0.15; this.mBase = 1.0;
+        }
+        // ランダムノイズを加えることで、初期の熱ゆらぎを導入（必須）
+        this.temperature += (Math.random() * 0.1 - 0.05); 
+        this.stress += (Math.random() * 0.05 - 0.025);
+
+        // 3タイプごとの引力バイアスを設定
         switch(this.type) {
             case 'drive':
-                this.temperature = 0.7 + layerTempBoost; // Reverted from 0.85
                 this.attractionBias = 1.2;
                 break;
             case 'freeze':
-                this.temperature = 0.4 + layerTempBoost;
                 this.attractionBias = 0.8;
                 break;
             case 'flow':
-                this.temperature = 0.6 + layerTempBoost; // Reverted from 0.75
                 this.attractionBias = 1.0;
                 break;
         }
+        this.massEff = this.mBase;
         
         const geometry = new THREE.SphereGeometry(0.8, 16, 16);
         const material = new THREE.MeshPhongMaterial({
@@ -70,6 +100,10 @@ class Particle {
         this.mesh.castShadow = true;
         scene.add(this.mesh);
         
+        // Debug properties
+        this.debug_centralForce = 0;
+        this.debug_boundaryForce = 0;
+
         this.createLabel(config.name, scene);
     }
     
@@ -110,16 +144,21 @@ class Particle {
         const distToCenter = this.position.length();
         const boundaryDiff = Math.abs(distToCenter - this.baseRadius);
         if (boundaryDiff > 2) {
-            stressIncrease += 0.01 * boundaryDiff;
+            stressIncrease += 0.008 * boundaryDiff; // ストレス増加の感度を少し下げる
         }
         
-        const releaseRate = this.name === '楽' ? 0.15 : 0.1;
+        // 提案: 時間変化率に基づいてストレス解放率を動的に調整
+        // システムが加熱・興奮している(tempChangeRate > 0)ほど、ストレスは解放されやすくなる
+        const tempChangeRate = globalParams.tempChangeRate || 0;
+        // 提案: ストレス解放レートを緩和 (ユーザー提案)
+        const releaseRate_base = 0.05; // Was 0.05
+        const releaseRate = releaseRate_base * (1.0 + Math.max(0, tempChangeRate * 5.0));
         const stressReleased = this.stress * releaseRate;
         
         // --- 応力伝導の計算 (可逆的・入れ子構造) ---
         const K_Stress_Cond = 0.008; // 層間応力伝導係数
-        let stressTransfer = 0;
 
+        let stressTransfer = 0;
         if (this.layer === 0) {
             // L0粒子: 光源との応力交換
             stressTransfer = K_Stress_Cond * (core.stress - this.stress);
@@ -128,40 +167,48 @@ class Particle {
             const stress_avg_inner = globalParams.avg_stress_by_layer[this.layer - 1];
             stressTransfer = K_Stress_Cond * (stress_avg_inner - this.stress);
         }
-
         if (this.layer === 5) {
             // L5粒子: 外部環境との応力交換も追加
             const K_Stress_Env = 0.005;
             stressTransfer += K_Stress_Env * (globalParams.globalExternalStress - this.stress);
         }
+        // 提案: 過剰な減衰を防ぐため stressDecay を削除 (ユーザー提案)
         this.stress += (stressIncrease + stressTransfer - stressReleased) * dt;
         
         // --- 熱伝導の計算 (可逆的・入れ子構造) ---
         const K_Cond = 0.08; // 層間熱伝導係数
         let heatTransfer = 0;
 
+        // 提案: 光源の動的温度を熱交換の基準として使用 (ユーザー提案)
+        const T_Source = globalParams.T_Source || globalParams.T_env;
+
         if (this.layer === 0) {
             // L0粒子: 光源との熱交換
-            const T_Source = core.temperature;
             heatTransfer = K_Cond * (T_Source - this.temperature);
         } else {
             // L1-L5粒子: 内側層との熱交換
             const T_avg_inner = globalParams.avg_temp_by_layer[this.layer - 1];
             heatTransfer = K_Cond * (T_avg_inner - this.temperature);
         }
-
-        if (this.layer === 5) {
-            // L5粒子: 外部環境との熱交換も追加
-            const K_Env = 0.003;
-            heatTransfer += K_Env * (T_env - this.temperature);
-        }
         
-        const speedFactor = 0.02 * (this.velocity.length() - (this.type === 'drive' ? 0.8 : (this.type === 'flow' ? 0.9 : 1.05)));
-        const stressHeating = 0.3 * stressReleased;
+        // 提案: 運動エネルギーからの加熱（Speed Factor）の抑制
+        const speedFactor = Math.max(0, 0.01 * (this.velocity.length() - (this.type === 'drive' ? 0.8 : (this.type === 'flow' ? 0.9 : 1.05))));
+        // 提案: ストレスからの熱変換効率を調整
+        const K_Stress_Heat_Conversion = 0.08; // 熱源を強化
+        const stressHeating = this.stress * K_Stress_Heat_Conversion;
+        
+        // 提案: 輻射冷却（熱損失）
+        const K_Radiation = 0.06; // 冷却係数を再調整
+        const radiativeCooling = -K_Radiation * Math.pow(this.temperature, 2);
 
-        this.temperature += (speedFactor + heatTransfer + stressHeating) * dt;
-        this.temperature = Math.max(0, Math.min(1.5, this.temperature));
-        this.massEff = this.mBase * (1.0 + 0.5 * this.temperature + 0.3 * this.stress);
+        // 温度を更新
+        this.temperature += (speedFactor + stressHeating + radiativeCooling + heatTransfer) * dt;
+        this.temperature = Math.max(0.1, this.temperature); // 物理的な最低温度を保証
+
+        // --- 提案: 時間変化率に基づいて質量を動的に調整 ---
+        // システムが冷却・沈静化している(tempChangeRate < 0)ほど、慣性が増して重くなる
+        const massModulator = 1.0 + Math.max(0, -tempChangeRate * 10.0);
+        this.massEff = this.mBase * (1.0 + 0.1 * this.stress) * massModulator;
 
         // ----------------------------------------------------
         // --- 力の計算 (SPEC.md準拠)
@@ -209,12 +256,22 @@ class Particle {
         this.debug_boundaryForce = boundaryForceVec.length(); // Store for UI
 
         // 4. 次元曲率力 (F_πn) - SPEC.md Section 5
+        // 脳波モデルに基づく変調項を導入
+        const S_Total = globalParams.systemPotential_Sn_total || 0;
+        const S_Ref = 0.5;
+        // 安定ポテンシャル S_Ref に近いほど、次元曲率力による抵抗 α が強くなる
+        // S_TotalがS_Refより低い場合（休息状態）に抵抗が強くなるように調整
+        const S_Modulator = 1.0 + Math.max(0, 3.0 * (S_Ref - S_Total)); // 係数を3.0に設定
+
         const π_local = globalParams.pi_n_by_layer[this.layer];
         const axis = new THREE.Vector3(0, 0, 1);
         const omega_n = 2.8 * Math.exp(-0.65 * this.layer);
         const v_ideal = new THREE.Vector3().crossVectors(axis, this.position).normalize()
                           .multiplyScalar(omega_n * this.position.length());
-        const alpha = 1.3 / (1 + 0.7 * this.layer);
+        
+        // 変調を適用
+        const alpha = (1.3 / (1 + 0.7 * this.layer)) * S_Modulator;
+
         const F_pi_n = v_ideal.clone().sub(this.velocity)
                         .multiplyScalar(-alpha * π_local);
         force.add(F_pi_n);
@@ -305,38 +362,10 @@ class CoreParticle extends Particle {
 
     update(dt, allParticles, core, globalParams) {
         // 1. 位置は常に原点に固定
-        this.position.set(0, 0, 0);
         this.mesh.position.copy(this.position);
 
-        // 2. 自身の状態更新
-        // 2a. 質量(massEff)を動的に計算 (旧CoreLightのロジックを移植)
-        if (globalParams.Gamma_n_by_layer && globalParams.Gamma_n_by_layer.length > 0) {
-            // G-Forceの源泉を「全層平均」から「核層(L0)の状態」に修正 (哲学的一貫性のため)
-            const gamma_L0 = globalParams.Gamma_n_by_layer[0];
-
-            const G_MIN = 2.0;
-            const K_RESPONSE = 50.0;
-            this.massEff = G_MIN + K_RESPONSE * gamma_L0;
-            this.massEff = Math.min(20.0, this.massEff); // 上限を設定
-        }
-
-        // 2b. 温度と輝度を更新 (SPEC.md準拠の自己回帰ロジック)
-        const T_Base = 1.0;      // 基準温度
-        const K_S = 0.8;         // ポテンシャルへの応答係数
-        const S_Ref = 0.5;       // 安定基準ポテンシャル
-        const S_Total = globalParams.systemPotential_Sn_total || 0;
-
-        this.temperature = T_Base + K_S * (S_Total - S_Ref);
-        this.temperature = Math.max(0.2, Math.min(2.5, this.temperature)); // 温度が極端にならないようにクランプ
-
-        this.mesh.material.emissiveIntensity = 0.8 + this.temperature * 0.2;
-        this.light.intensity = this.temperature * 2;
-
-        // 4. スケールを動的に更新 (核層の粒子と同じロジック)
-        const baseScale = 0.4 + 0.2 * this.massEff;
-        const finalScale = baseScale * LAYER_SCALE_FACTORS[this.layer]; // this.layerは0
-        this.mesh.scale.setScalar(finalScale);
-
-        // 3. 熱源としての機能は、L0粒子がCoreParticleの温度を参照する形で実装されたため、ここでの一括処理は不要。
+        // 質量(massEff)と温度(temperature)の計算は、emotion_graph.jsのメインループに移行された。
+        // CoreParticleは、メインループによって設定された値を保持し、可視化を更新する役割のみを担う。
+        // (輝度とライト強度の更新はメインループに移動済み)
     }
 }

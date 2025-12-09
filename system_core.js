@@ -35,21 +35,48 @@ function V_n(n, pi_n) {
 
 
 // ===== 季節判定 =====
-let lastL5AverageTemp = 0.5;
-function determineSeason(l5Particles) {
-    if (l5Particles.length === 0) return "冬";
-
-    const avgTemp = l5Particles.reduce((sum, p) => sum + p.temperature, 0) / l5Particles.length;
-    const tempChangeRate = avgTemp - lastL5AverageTemp;
-    lastL5AverageTemp = avgTemp;
-
-    if (avgTemp > 0.65) {
-        return tempChangeRate > 0 ? "夏" : "秋";
-    } else {
-        return tempChangeRate > 0 ? "春" : "冬";
+let lastL5AverageTemp = 0.5; // 変化率計算用の前回値
+let lastL5AverageStress = 0.1; // 変化率計算用の前回値
+function determineSystemState(l5Particles) {
+    if (l5Particles.length === 0) {
+        return { brainwave: "δ波 (哀/冬)", season: "冬", weather: "哀" };
     }
-}
 
+    const avgTemp = l5Particles.reduce((s, p) => s + p.temperature, 0) / l5Particles.length;
+    const avgStress = l5Particles.reduce((s, p) => s + p.stress, 0) / l5Particles.length;
+
+    // 定義パラメータ
+    const T_HIGH = 0.7;  // β/αの境界
+    const T_MID = 0.55;  // α/θの境界
+    const T_LOW = 0.5;   // θ/δの境界を少し引き上げ
+
+    const S_HIGH = 0.4;  // 怒の境界
+    const S_MID = 0.25;  // 楽/喜の境界
+
+    // 時間変化率を計算
+    const tempChangeRate = avgTemp - lastL5AverageTemp;
+
+    // 1. 非常に高温・高ストレス -> β波 (怒/夏)
+    if (avgTemp >= T_HIGH && avgStress >= S_HIGH) {
+        return { brainwave: "β波 (怒/夏)", season: "夏", weather: "怒" };
+    }
+    
+    // 2. 中温域で低ストレス -> θ波 (楽/秋) - 先に評価する
+    if (avgTemp >= T_LOW) {
+        if (avgStress <= S_MID) {
+            return { brainwave: "θ波 (楽/秋)", season: "秋", weather: "楽" };
+        }
+    }
+
+    // 3. 高温または中温でストレスが中程度 -> α波 (喜/春)
+    if (avgTemp >= T_MID) {
+        const season = (tempChangeRate > 0) ? "春" : "秋";
+        return { brainwave: `α波 (喜/${season})`, season: season, weather: "喜" };
+    }
+    
+    // 4. 低温 (T < 0.4)
+    return { brainwave: "δ波 (哀/冬)", season: "冬", weather: "哀" };
+}
 
 // ===== ETCMコアロジック：動的次元力学（DDD）の更新 =====
 function updateGlobalDDD(particles, globalParams) {
@@ -129,7 +156,10 @@ function updateGlobalDDD(particles, globalParams) {
 
     // 4. 季節と「内部」オーラの決定
     const l5Particles = layerDefs[5].particles;
-    globalParams.season = determineSeason(l5Particles);
+    const systemState = determineSystemState(l5Particles);
+    globalParams.season = systemState.season;
+    globalParams.brainwaveState = systemState.brainwave;
+    globalParams.internalAuraWeather = systemState.weather;
     
     if (l5Particles.length > 0) {
         const avgTemp = l5Particles.reduce((sum, p) => sum + p.temperature, 0) / l5Particles.length;
@@ -138,73 +168,13 @@ function updateGlobalDDD(particles, globalParams) {
         globalParams.l5_avg_temp = avgTemp;
         globalParams.l5_avg_stress = avgStress;
 
-        // このロジックは「内部オーラ」を決定する
-        if (avgTemp >= 0.75 && avgStress <= 0.4) globalParams.internalAuraWeather = '喜';
-        else if (avgTemp >= 0.5 && avgStress <= 0.3) globalParams.internalAuraWeather = '楽';
-        else if (avgTemp < 0.5 && avgStress <= 0.2) globalParams.internalAuraWeather = '哀';
-        else if (avgStress > 0.4) globalParams.internalAuraWeather = '怒';
-        // 論理の穴を埋めるため、いずれにも当てはまらない場合のデフォルトを定義
-        else {
-             globalParams.internalAuraWeather = '楽'; // or some other default
-        }
+        // 時間変化率を計算してグローバルパラメータに格納
+        globalParams.tempChangeRate = avgTemp - lastL5AverageTemp;
+        globalParams.stressChangeRate = avgStress - lastL5AverageStress;
 
-    } else {
-        globalParams.internalAuraWeather = '楽';
-    }
-}
-
-
-// ===== 中心核「光」の実装 =====
-// このクラスはCoreParticleに置き換えられたため、現在は使用されていません。
-class CoreLight {
-    constructor(scene) {
-        this.position = new THREE.Vector3(0, 0, 0);
-        this.luminosity = 0.8;
-        this.magneticMass = 2.0;
-        
-        const geometry = new THREE.SphereGeometry(0.3, 32, 32);
-        const material = new THREE.MeshPhongMaterial({
-            color: 0xFFFFAA,
-            emissive: 0xFFFFAA,
-            emissiveIntensity: 1.0,
-            transparent: true,
-            opacity: 0.9
-        });
-        this.mesh = new THREE.Mesh(geometry, material);
-        scene.add(this.mesh);
-        
-        this.light = new THREE.PointLight(0xFFFFAA, 2, 100);
-        this.light.castShadow = true;
-        scene.add(this.light);
-    }
-    
-    update(allParticles, globalParams) { 
-        // 創発重力 G (magneticMass) の計算: Ｇは全層のΓnの平均に比例
-        if (globalParams.Gamma_n_by_layer && globalParams.Gamma_n_by_layer.length > 0) {
-            const avgGamma = globalParams.Gamma_n_by_layer.reduce((s,v) => s+v, 0) / globalParams.Gamma_n_by_layer.length;
-            const G_MIN = 2.0;
-            const K_RESPONSE = 50.0; // Γnはρnよりずっと大きいので係数を調整
-            this.magneticMass = G_MIN + K_RESPONSE * avgGamma;
-            this.magneticMass = Math.min(20.0, this.magneticMass);
-        } else {
-            this.magneticMass = 2.0;
-        }
-
-        // Luminosityの更新 (全体の平均温度とストレスに依存)
-        if (allParticles.length > 0) {
-            const avgTemp = allParticles.reduce((sum, p) => sum + p.temperature, 0) / allParticles.length;
-            const avgStress = allParticles.reduce((sum, p) => sum + p.stress, 0) / allParticles.length;
-            this.luminosity = 0.8 + 0.4 * avgTemp - 0.3 * avgStress;
-            this.luminosity = Math.max(0.3, Math.min(1.5, this.luminosity));
-        } else {
-            this.luminosity = 0.3;
-        }
-        
-        this.mesh.material.emissiveIntensity = this.luminosity;
-        this.light.intensity = this.luminosity * 2;
-        
-        const scale = 1.0 + 0.5 * this.luminosity;
-        this.mesh.scale.setScalar(scale);
+        // 次のフレームのために現在値を保存
+        lastL5AverageTemp = avgTemp;
+        lastL5AverageStress = avgStress;
     }
 }
 
