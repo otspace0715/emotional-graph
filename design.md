@@ -107,15 +107,9 @@
 | システム状態 (脳波/天気) | L5層の平均 T、平均 \( \sigma \)、および T の時間変化率から統一的に決定（α/β/θ/δ、喜怒哀楽） | 全体色相、粒子エフェクト、UI表示に反映 |
 | 感情名称（76+種） | 支配的粒子（\( \sigma \) 最大）＋システム状態（季節） | リアルタイム生成（例：強固な調（秋）） |
 
-## VII. 📊 出力パラメータ（TOON形式対応）
+## VII. 📊 入力値パラメータ（TOON形式対応）
 
-| 変数名 | 意味 | 実装場所 |
-|--------|------|----------|
-| pi_n_stability | 現在の \( \pi_n \) 値（層平均） | system_core.js |
-| rho_n_intensity | 情報密度 \( \rho_n \) | system_core.js |
-| emotional_mass | M = \( S_n \)（感情の重さ） | system_core.js |
-| dominant_emotion | 支配的粒子の感情名＋修飾語＋季節 | emotion_graph.js |
-| layer_radius_mean_eff_mass | 層半径 \( R_{\text{Layer}} \) の動的変動を決定する \( \bar{m}_{\text{eff}} \) | system_core.js |
+検討中
 
 ## VIII. 📜 哲学的結論（設計の最終指針）
 
