@@ -48,9 +48,18 @@ const globalParams = {
   dominantEmotion: "---",
   brainwaveState: "---", // 脳波状態を追加
   pi_n_average: 0,
+  maxInfluenceIndex: 0, // E-1: K_EM計算用に最大影響度指数を格納
   avg_temp_by_layer: [], // 層ごとの平均温度を格納
   avg_stress_by_layer: [] // 層ごとの平均ストレスを格納
 };
+
+// U-1: Timeline-related global variables
+let timelineData = null;
+let simulationStartTime = 0;
+let currentSegmentIndex = 0;
+let nextKeyframeIndex = 0;
+let wpm = 400; // Words Per Minute
+
 let lastTime = Date.now();
 
 function init() {
@@ -82,6 +91,7 @@ function init() {
     setupEmotionControls();
     setupToonInput();
     setupDebugToggle(); // 新しいデバッグ切替をセットアップ
+    setupWpmSlider(); // WPMスライダーをセットアップ
 
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -162,6 +172,15 @@ function setupDebugToggle() {
     });
 }
 
+function setupWpmSlider() {
+    const slider = document.getElementById('wpm-slider');
+    const valueDisplay = document.getElementById('wpm-value');
+    slider.addEventListener('input', () => {
+        wpm = parseInt(slider.value, 10);
+        valueDisplay.textContent = wpm;
+    });
+}
+
 function setupEmotionControls() {
     document.querySelectorAll('.emotion-button').forEach(button => {
         button.addEventListener('click', () => {
@@ -211,42 +230,210 @@ function setupToonInput() {
 }
 
 function parseToonInput(toonString) {
-    if (!toonString || toonString.trim() === "") throw new Error("入力が空です。");
-    const lines = toonString.split('\n').filter(line => line.trim() !== '' && !line.trim().startsWith('#'));
-    const data = { system_parameters: {}, external_field_analysis: {} };
-    let currentSection = null;
-    for (const line of lines) {
-        if (line.trim().startsWith('system_parameters:')) { currentSection = data.system_parameters; continue; }
-        if (line.trim().startsWith('external_field_analysis:')) { currentSection = data.external_field_analysis; continue; }
-        if (currentSection) {
-            const parts = line.trim().split(':');
-            if (parts.length === 2) currentSection[parts[0].trim()] = parts[1].trim();
+    // U-1: Advanced TOON Parser
+    if (!toonString || toonString.trim() === "") throw new Error("TOON入力が空です。");
+
+    const lines = toonString.split('\n').map(line => line.replace(/#.*$/, '').trimEnd());
+    const result = {};
+    const path = [];
+    let currentIndent = -1;
+    let inTable = null;
+
+    function getIndent(line) { return line.match(/^\s*/)[0].length; }
+
+    function getRef(obj, p) {
+        let ref = obj;
+        for (let i = 0; i < p.length; i++) {
+            if (typeof ref[p[i]] === 'undefined') {
+                if (i < p.length - 1 && typeof p[i+1] === 'number') ref[p[i]] = [];
+                else ref[p[i]] = {};
+            }
+            ref = ref[p[i]];
+        }
+        return ref;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.trim() === '') continue;
+
+        const indent = getIndent(line);
+        const content = line.trim();
+
+        if (inTable) {
+            if (indent > currentIndent) {
+                const values = content.split(',').map(v => v.trim());
+                const row = {};
+                inTable.headers.forEach((h, idx) => {
+                    const val = values[idx];
+                    row[h] = !isNaN(parseFloat(val)) && isFinite(val) ? parseFloat(val) : val;
+                });
+                getRef(result, path).push(row);
+                continue;
+            } else {
+                inTable = null;
+            }
+        }
+
+        const pathDepth = Math.floor(indent / 2);
+        path.splice(pathDepth);
+        currentIndent = indent;
+
+        if (content.startsWith('-')) {
+            const arrayPath = path.slice(0, -1);
+            const arrayKey = path[path.length - 1];
+            const parent = getRef(result, arrayPath);
+            if (!Array.isArray(parent[arrayKey])) parent[arrayKey] = [];
+            parent[arrayKey].push({});
+            path[path.length] = parent[arrayKey].length - 1;
+            const itemContent = content.substring(1).trim();
+            if (itemContent) {
+                 const [key, value] = itemContent.split(/:(.*)/s).map(s => s.trim());
+                 getRef(result, path)[key] = value;
+            }
+        } else {
+            const [keyPart, value] = content.split(/:(.*)/s).map(s => s.trim());
+            
+            const tableMatch = keyPart.match(/^(.+)\[(\d+)\]\{(.+)\}$/);
+            const arrayMatch = keyPart.match(/^(.+)\[(\d+)\]$/);
+
+            if (tableMatch) {
+                const [, key, , headers] = tableMatch;
+                path.push(key);
+                getRef(result, path.slice(0,-1))[key] = [];
+                inTable = { headers: headers.split(',').map(h => h.trim()) };
+            } else if (arrayMatch) {
+                const [, key] = arrayMatch;
+                path.push(key);
+            } else {
+                if (value !== undefined) {
+                    // `highlight_range[2]: 0, 73` のような形式を正しくパースする
+                    const simpleArrayMatch = keyPart.match(/^(.+)\[\d+\]$/);
+                    if (simpleArrayMatch) {
+                        const key = simpleArrayMatch[1];
+                        getRef(result, path)[key] = value.split(',').map(v => parseFloat(v.trim()));
+                    } else {
+                        getRef(result, path)[keyPart] = !isNaN(parseFloat(value)) && isFinite(value) ? parseFloat(value) : value;
+                    }
+                } else {
+                    path.push(keyPart);
+                }
+            }
         }
     }
-    if (Object.keys(data.system_parameters).length === 0) throw new Error("'system_parameters'セクションがありません。");
-    const params = { T: parseFloat(data.system_parameters.T_activity_avg), M: parseFloat(data.system_parameters.M_inertia_avg), S: parseFloat(data.system_parameters.S_load_avg) };
-    for (const key in params) if (isNaN(params[key])) throw new Error(`無効な数値: ${key}`);
-    return params;
+    if (!result.metadata || !Array.isArray(result.metadata)) throw new Error("TOON形式にはトップレベルの`metadata`配列が必要です。");
+    return result;
 }
 
 function resetSimulation(params) {
+    // U-1: Reset timeline state
+    timelineData = null;
+    simulationStartTime = Date.now();
+    currentSegmentIndex = 0;
+    nextKeyframeIndex = 0;
+    document.getElementById('narrative-display').style.display = 'none';
+    document.getElementById('narrative-display').innerHTML = '';
+
     particles.forEach(p => {
         scene.remove(p.mesh); scene.remove(p.label);
         if (p.mesh.geometry) p.mesh.geometry.dispose();
         if (p.mesh.material) p.mesh.material.dispose();
-        if (p.label.material) p.label.material.dispose();
+        if (p.label && p.label.material) p.label.material.dispose();
     });
     particles = [];
     createParticles();
+
     if (params) {
-        particles.forEach(p => { p.temperature = params.T || 0.5; p.stress = params.S || 0.1; p.mBase = 1.0 + (params.M || 0.5); });
+        // New format handling
+        if (params.metadata && params.metadata.length > 0) {
+            timelineData = params; // Store the whole parsed object
+            // Start with the first segment
+            const firstSegment = timelineData.metadata[0];
+            if (firstSegment.source_text) {
+                document.getElementById('narrative-display').style.display = 'block';
+                document.getElementById('narrative-display').innerHTML = firstSegment.source_text.replace(/\n/g, '<br>');
+            }
+        }
+    } else {
+        // Default to "楽" state if no params are provided
+        document.querySelector('#calm').click();
     }
 }
 
 function animate() {
     requestAnimationFrame(animate);
+    // この更新はループの先頭で必ず行う
     const dt = Math.min((Date.now() - lastTime) / 1000, 0.1);
     lastTime = Date.now();
+
+    // U-1: Timeline processing
+    if (timelineData && timelineData.metadata && timelineData.metadata[currentSegmentIndex]) {
+        const segment = timelineData.metadata[currentSegmentIndex];
+        if (segment.timeline && nextKeyframeIndex < segment.timeline.length) {
+            const keyframe = segment.timeline[nextKeyframeIndex];
+            
+            // 動的なタイムスタンプ計算
+            // 読了時間 = (文字数 / WPM) * 60秒
+            const textToRead = segment.source_text.substring(0, keyframe.highlight_range[1]);
+            // 日本語は1文字を1単語と近似的に扱う
+            const wordCount = textToRead.length; 
+            const timestampSeconds = (wordCount / wpm) * 60;
+            
+            const elapsedTime = (Date.now() - simulationStartTime) / 1000;
+            if (elapsedTime >= timestampSeconds) {
+                // Apply external aura
+                if (keyframe.external_aura) {
+                    globalParams.T_env = keyframe.external_aura.T;
+                    globalParams.globalExternalStress = keyframe.external_aura.S;
+                    globalParams.display_T_env = keyframe.external_aura.T;
+                    globalParams.display_GlobalStress = keyframe.external_aura.S;
+                }
+
+                // Apply particle overrides
+                if (keyframe.particle_overrides) {
+                    keyframe.particle_overrides.forEach(override => {
+                        const targetParticle = particles.find(p => p.name === override.name);
+                        if (targetParticle) {
+                            if (typeof override.T !== 'undefined') targetParticle.temperature = override.T;
+                            if (typeof override.S !== 'undefined') targetParticle.stress = override.S;
+                            if (typeof override.M !== 'undefined') targetParticle.mBase = override.M;
+                        }
+                    });
+                }
+                
+                // Update UI text highlight
+                if (segment.source_text && keyframe.highlight_range) {
+                    const text = segment.source_text;
+                    const [start, end] = keyframe.highlight_range;
+                    const highlightedText = text.substring(0, start) + `<span class="highlight">${text.substring(start, end)}</span>` + text.substring(end);
+                    document.getElementById('narrative-display').innerHTML = highlightedText.replace(/\n/g, '<br>');
+                }
+                nextKeyframeIndex++;
+            }
+        } else {
+            // Current segment's timeline is finished, try to move to the next segment
+            currentSegmentIndex++;
+            if (timelineData.metadata[currentSegmentIndex]) {
+                // Reset for the new segment
+                nextKeyframeIndex = 0;
+                simulationStartTime = Date.now(); // タイマーをリセット
+                const newSegment = timelineData.metadata[currentSegmentIndex];
+                if (newSegment.source_text) {
+                    document.getElementById('narrative-display').innerHTML = newSegment.source_text.replace(/\n/g, '<br>');
+                }
+            } else {
+                // 全セグメントが終了したらループする
+                currentSegmentIndex = 0;
+                nextKeyframeIndex = 0;
+                simulationStartTime = Date.now();
+                const firstSegment = timelineData.metadata[0];
+                if (firstSegment && firstSegment.source_text) {
+                    document.getElementById('narrative-display').innerHTML = firstSegment.source_text.replace(/\n/g, '<br>');
+                }
+            }
+        }
+    }
+
     // Decay the physics stress, but not the display stress
     globalParams.globalExternalStress = Math.max(0, globalParams.globalExternalStress * (1 - 2.5 * dt));
 
@@ -282,6 +469,9 @@ function animate() {
         // 光源自体の温度と輝度も更新
         coreParticle.temperature = globalParams.T_Source;
         // These were moved from CoreParticle.update
+        // P-1: 創発重力の実装。system_coreで計算された動的質量を適用する
+        coreParticle.massEff = globalParams.coreMagneticMass;
+
         coreParticle.mesh.material.emissiveIntensity = 0.8 + coreParticle.temperature * 0.2;
         coreParticle.light.intensity = coreParticle.temperature * 2;
     }
@@ -293,25 +483,37 @@ function animate() {
     externalAuraCloud.setVisible(globalParams.externalAuraVisible);
     externalAuraCloud.update(globalParams);
 
-    // 支配的感情の決定ロジック (有効活動度指数 A_Index が最大の粒子) - 哲学的欠陥修正
+    // U-3: Dominant Emotion 統一判定ロジックの実装
+    // 「影響度指数 (Influence Index)」が最大の粒子を特定し、SPEC.mdの仕様に合わせて表示する
     if (particles.length > 0) {
         // 光源を除く18粒子で計算
         const nonCoreParticles = particles.filter(p => !(p instanceof CoreParticle));
         
-        let maxActivityIndex = -Infinity;
+        let maxInfluenceIndex = -Infinity;
         let dominantEmotionName = "---";
 
         if (nonCoreParticles.length > 0) {
+            // システム全体の平均値（影響度を相対的に評価するため）
+            const avgTemp = nonCoreParticles.reduce((s, p) => s + p.temperature, 0) / nonCoreParticles.length;
+            const avgStress = nonCoreParticles.reduce((s, p) => s + p.stress, 0) / nonCoreParticles.length;
+
             nonCoreParticles.forEach(p => {
-                // A_Index = T * (1 - sigma) / m_eff
-                const activityIndex = p.temperature * (1.0 - p.stress) / p.massEff;
-                if (activityIndex > maxActivityIndex) {
-                    maxActivityIndex = activityIndex;
+                // 影響度指数 = (相対温度) * (ストレスの低さ) * (質量の大きさ)
+                // 温度が高く、ストレスが低く、質量が大きいほど影響力が強いと定義
+                const relativeTemp = p.temperature / (avgTemp + 1e-6);
+                const stressFactor = 1.0 - p.stress;
+                const influenceIndex = relativeTemp * stressFactor * p.massEff;
+
+                if (influenceIndex > maxInfluenceIndex) {
+                    maxInfluenceIndex = influenceIndex;
                     dominantEmotionName = p.name;
                 }
             });
+            // E-1: K_EM計算用に最大影響度指数をグローバルパラメータに格納
+            globalParams.maxInfluenceIndex = maxInfluenceIndex;
         }
-        globalParams.dominantEmotion = dominantEmotionName;
+        // SPEC.mdの仕様通り「粒子名（季節・天気）」の形式で格納
+        globalParams.dominantEmotion = `${dominantEmotionName}（${globalParams.season}・${globalParams.internalAuraWeather}）`;
     } else {
         globalParams.dominantEmotion = "---";
     }

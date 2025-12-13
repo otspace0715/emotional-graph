@@ -85,16 +85,16 @@ function updateGlobalDDD(particles, globalParams) {
 
     // 0. 初期化
     const layerDefs = [
-        { n: 2, name: "核", particles: [] },
-        { n: 3, name: "身体", particles: [] },
-        { n: 4, name: "思考", particles: [] },
-        { n: 5, name: "文明", particles: [] },
-        { n: 6, name: "外部接合", particles: [] },
-        { n: 7, name: "外部雰囲気", particles: [] }
+        { n: 3, name: "核層", particles: [] },       // L0
+        { n: 4, name: "身体層", particles: [] },     // L1
+        { n: 5, name: "思考層", particles: [] },     // L2
+        { n: 6, name: "文明層", particles: [] },     // L3
+        { n: 7, name: "外部接合層", particles: [] }, // L4
+        { n: 8, name: "外部雰囲気層", particles: [] }  // L5
     ];
 
     particles.forEach(p => {
-        if (p.layer >= 0 && p.layer < layerDefs.length) {
+        if (p.layer >= 0 && p.layer < layerDefs.length && !(p instanceof CoreParticle)) {
             layerDefs[p.layer].particles.push(p);
         }
     });
@@ -108,35 +108,48 @@ function updateGlobalDDD(particles, globalParams) {
         return avgT + avgS; // 仮にエネルギーをT+Sとする
     });
     
-    const [a, c, d, e, f, g] = layerEnergies;
-    const b = layerEnergies.reduce((s, val) => s + val, 0) / (layerEnergies.filter(v => v > 0).length || 1);
+    // SPEC.md 3. 核心数理 に基づくエネルギー変数の定義
+    // 新しい解釈: aは中心核のエネルギー、b-gは各層のエネルギー
+    const a = globalParams.T_Source || 1.0; // a: 中心核のエネルギー (T_Source)
+    const b = layerEnergies[0]; // b: L0のエネルギー
+    const c = layerEnergies[1]; // c: L1のエネルギー
+    const d = layerEnergies[2]; // d: L2のエネルギー
+    const e = layerEnergies[3]; // e: L3のエネルギー
+    const f = layerEnergies[4]; // f: L4のエネルギー
+    const g = layerEnergies[5]; // g: L5のエネルギー
+    // h は L6 のエネルギーに相当するが、現在は未定義
 
-    // 2. S_n, π_n, V_n, ρ_n, Γ_n を層ごとに計算
-    let S_n_total = 0; // 総ポテンシャルは別途計算
+    // 2. B_n, S_n, π_n, V_n, ρ_n, Γ_n を層ごとに計算
     const new_pi_n = [];
     const new_rho_n = [];
     const new_Gamma_n = [];
 
-    // 2-1. ポテンシャルS_nを連鎖構造で計算
-    // S_n = S_{n-1} + 3 * (layer_energy) の構造を実装
-    const Sn_values = [];
-    Sn_values[0] = a + 3 * b; // S_2
-    Sn_values[1] = Sn_values[0] + 3 * c; // S_3
-    Sn_values[2] = Sn_values[1] + 3 * d; // S_4
-    Sn_values[3] = Sn_values[2] + 3 * e; // S_5
-    Sn_values[4] = Sn_values[3] + 3 * f; // S_6
-    Sn_values[5] = Sn_values[4] + 3 * g; // S_7
-    S_n_total = Sn_values[5]; // S_7に相当するものが総ポテンシャル
+    // 2-1. SPEC.md 3. に基づき、B_n (偏移パラメータの累積和) を計算
+    const B_values = [];
+    B_values[0] = b;                   // B_3 (L0)
+    B_values[1] = b + c;               // B_4 (L1)
+    B_values[2] = b + c + d;           // B_5 (L2)
+    B_values[3] = b + c + d + e;       // B_6 (L3)
+    B_values[4] = b + c + d + e + f;   // B_7 (L4)
+    B_values[5] = b + c + d + e + f + g; // B_8 (L5)
 
-    // 2-2. 各層のπ_n, ρ_n, Γ_nを計算
+    // 2-2. 各層のπ_n, ρ_n, Γ_nを計算 (SPEC.md 3.2 統一式)
     for (let i = 0; i < 6; i++) {
         const n = layerDefs[i].n;
-        const S_n_local = Sn_values[i]; // 各層固有のポテンシャルを使用
+        const B_n = B_values[i];
         
-        // SPEC.mdの確定式 (22*S_n + 3*b) / (7*S_n + b) を使用
-        const pi_n_numerator = 22 * S_n_local + 3 * b; // 3(7S_n+b)+S_n を展開した形
-        const pi_n_denominator = 7 * S_n_local + b; // 
-        const pi_n = (pi_n_denominator !== 0) ? pi_n_numerator / pi_n_denominator : 3.14;
+        // SPEC.md 3.2 統一式: π_n = (22a + 69B_n) / (7a + 22B_n)
+        const pi_n_numerator = 22 * a + 69 * B_n;
+        const pi_n_denominator = 7 * a + 22 * B_n;
+
+        // ゼロ除算を防止し、極限値に収束させる
+        let pi_n;
+        if (pi_n_denominator !== 0) {
+            pi_n = pi_n_numerator / pi_n_denominator;
+        } else {
+            // aが厳密に0の場合は下限値(69/22)に、それ以外(B_nが原因)は上限値(22/7)にフォールバック
+            pi_n = (a === 0) ? (69 / 22) : (22 / 7);
+        }
         new_pi_n.push(pi_n);
 
         const vol_n = V_n(n, pi_n);
@@ -147,6 +160,30 @@ function updateGlobalDDD(particles, globalParams) {
         new_Gamma_n.push(Gamma_n);
     }
     
+    // 2-3. 総ポテンシャル S_n_total を計算 (SPEC.md 3.1)
+    // S_8 = a + 3*B_8
+    const S_n_total = a + 3 * B_values[5];
+
+    // P-1: 創発重力 (M_Core) の動的計算
+    const l0Particles = layerDefs[0].particles;
+    if (l0Particles.length > 0) {
+        const sumMassEff = l0Particles.reduce((sum, p) => sum + p.massEff, 0);
+        const sumStress = l0Particles.reduce((sum, p) => sum + p.stress, 0);
+        const sumTemp = l0Particles.reduce((sum, p) => sum + p.temperature, 0);
+
+        // M_Core = (Σ m_eff) * (1 + Σ σ) / (1 + Σ T)
+        // 熱が高いと質量が減少し、ストレスが高いと質量が増加するモデル
+        // 分母が0になるのを防ぐ (temperatureは常に0.1以上なので安全)
+        const denominator = 1 + sumTemp;
+        const newCoreMass = sumMassEff * (1 + sumStress) / denominator;
+
+        // 計算結果をglobalParamsに格納
+        globalParams.coreMagneticMass = Math.max(0.1, newCoreMass); // 質量が負にならないように保護
+    } else {
+        // フォールバック
+        globalParams.coreMagneticMass = 2.0;
+    }
+
     // 3. globalParamsを更新
     globalParams.pi_n_by_layer = new_pi_n;
     globalParams.rho_n_by_layer = new_rho_n;

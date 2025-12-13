@@ -15,6 +15,13 @@
             font-size: 13px; min-width: 340px; z-index: 10; border: 1px solid rgba(255,255,255,0.2);
         }
         .stats-panel h2 { color: #FFD700; margin-bottom: 10px; font-size: 18px; text-align: center; }
+        .narrative-panel {
+            position: absolute; top: 20px; right: 20px; background: rgba(0, 0, 0, 0.75);
+            color: #e5e7eb; padding: 15px; border-radius: 10px; font-family: 'Helvetica Neue', sans-serif;
+            font-size: 14px; max-width: 400px; z-index: 10; border: 1px solid rgba(255,255,255,0.2);
+            line-height: 1.6; max-height: 80vh; overflow-y: auto;
+        }
+        .highlight { background-color: rgba(255, 215, 0, 0.3); color: #FFFFAA; border-radius: 3px; }
         .stat-row { display: flex; justify-content: space-between; margin: 5px 0; }
         .stat-label { color: #BBB; }
         .stat-value { color: #00FFDD; font-weight: bold; }
@@ -53,6 +60,10 @@
 </head>
 <body>
     <div id="container"></div>
+
+    <div class="narrative-panel" id="narrative-display" style="display: none;">
+        <!-- Text from TOON file will be displayed here -->
+    </div>
 
     <div class="stats-panel">
         <h2>感情熱力学モデル</h2>
@@ -169,9 +180,17 @@
                 </div>
             </div>
     
+            <div style="margin-top: 1rem; text-align: center; width: 100%;">
+                <h2 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #f3f4f6;">読書速度 (WPM)</h2>
+                <div style="display: flex; align-items: center; justify-content: center; gap: 1rem;">
+                    <input type="range" id="wpm-slider" min="100" max="1000" value="400" step="50" style="width: 70%;">
+                    <span id="wpm-value" style="font-weight: bold; color: #facc15; min-width: 40px;">400</span>
+                </div>
+            </div>
+
             <div id="input-prompt-section" style="padding: 1rem; border-top: 1px solid #4b5563; margin-top: 1rem; width: 100%;">
                 <h3 style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">AIパラメータ入力 (TOON形式)</h3>
-                <textarea id="json-input-area" rows="4" style="width: 100%; padding: 0.5rem; font-size: 0.75rem; background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.25rem;" placeholder="system_parameters:\n  T_activity_avg: 0.7\n  M_inertia_avg: 0.5\n  S_load_avg: 0.3\nexternal_field_analysis:\n  polarity: attractive\n  strength: 0.8"></textarea>
+                <textarea id="json-input-area" rows="4" style="width: 100%; padding: 0.5rem; font-size: 0.75rem; background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.25rem; color: #e5e7eb; caret-color: #facc15;" placeholder="ここに熱力学アナライザーが出力したTOON形式のテキストを貼り付けます..."></textarea>
                 <button id="apply-prompt-button" style="width: 100%; margin-top: 0.5rem; padding: 0.25rem 0; background-color: #4f46e5; border-radius: 0.25rem; color: white; font-size: 0.875rem; font-weight: 600;">
                     パラメータをシミュレーションに適用
                 </button>

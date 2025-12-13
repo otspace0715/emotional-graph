@@ -88,6 +88,19 @@ class Particle {
                 break;
         }
         this.massEff = this.mBase;
+
+        // E-1: 情報電荷 q_Info の定義 (SPEC.md 4.5)
+        switch(this.type) {
+            case 'drive':
+                this.q_Info = 2 / 3; // アップクォーク型
+                break;
+            case 'freeze':
+                this.q_Info = -1 / 3; // ダウンクォーク型
+                break;
+            case 'flow':
+                this.q_Info = 0; // ゲージボソン型
+                break;
+        }
         
         const geometry = new THREE.SphereGeometry(0.8, 16, 16);
         const material = new THREE.MeshPhongMaterial({
@@ -223,6 +236,35 @@ class Particle {
         force.add(centralForce);
         this.debug_centralForce = centralForce.length(); // Store for UI
 
+        // E-1: 電磁気力 (F_EM) の計算 (SPEC.md 4.5)
+        // この力は、drive粒子とfreeze粒子間でのみ働く (flow粒子は q=0)
+        if (this.q_Info !== 0) {
+            particles.forEach(other => {
+                if (other === this || other.q_Info === 0 || other instanceof CoreParticle) return;
+
+                const diff = other.position.clone().sub(this.position);
+                const distSq = diff.lengthSq();
+                if (distSq < 0.01 || distSq > 100) return; // 相互作用範囲を限定
+
+                // 1. 基本クーロン力
+                // K_EMは最大影響度指数から導出する (ユーザー提案)
+                // 影響度が高いほど、感情の相互作用も強くなるというモデル
+                const K_EM = 0.5 * globalParams.maxInfluenceIndex;
+                const baseForce = K_EM * (this.q_Info * other.q_Info) / distSq;
+
+                // 2. 変調項の計算
+                const k_s = 0.5; // ストレス変調係数
+                const Phi_stress = (1 + k_s * this.stress) * (1 + k_s * other.stress);
+
+                const beta = 1.5; // 温度共感係数
+                const Phi_temp = Math.exp(-beta * Math.abs(this.temperature - other.temperature));
+
+                // 3. 合成と力の適用
+                const totalForce = baseForce * Phi_stress * Phi_temp;
+                force.add(diff.normalize().multiplyScalar(totalForce));
+            });
+        }
+
         // 2. 粒子間相互作用 (斥力・引力)
         particles.forEach(other => {
             if (other === this) return;
@@ -230,7 +272,8 @@ class Particle {
             const dist = diff.length();
             if (dist < 0.1) return;
             const dir = diff.normalize();
-            if (dist < 3) {
+            // 同じ層の粒子が近づきすぎないように斥力を強化 (可視化優先)
+            if (other.layer === this.layer && dist < 4) {
                 force.add(dir.clone().multiplyScalar(-20 / Math.pow(dist, 3)));
             }
             if (Math.abs(other.layer - this.layer) === 1 && dist < 8) {
