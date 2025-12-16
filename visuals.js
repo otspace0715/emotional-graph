@@ -104,3 +104,63 @@ function createCloudBackground(scene) {
 
     return { cloudMaterial, updateCloudSize };
 }
+
+// ⚛️ 量子位相線（Visual Coherence Link）を管理するクラス
+class CoherenceLinkManager {
+    constructor(scene) {
+        this.scene = scene;
+        this.linePool = []; // THREE.Lineオブジェクトのプール
+        this.maxLinks = 50; // 同時に表示する線の最大数
+    }
+
+    // 線のプールを初期化または拡張する
+    _ensurePool(requiredCount) {
+        while (this.linePool.length < requiredCount && this.linePool.length < this.maxLinks) {
+            const material = new THREE.LineBasicMaterial({
+                color: 0x00FFDD,
+                linewidth: 1,
+                transparent: true,
+                opacity: 0.5,
+                blending: THREE.AdditiveBlending
+            });
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(2 * 3); // 2つの頂点 (x, y, z)
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            
+            const line = new THREE.Line(geometry, material);
+            line.visible = false;
+            this.scene.add(line);
+            this.linePool.push(line);
+        }
+    }
+
+    update(l0Particles, l1Particles, threshold) {
+        let linkCount = 0;
+
+        // まず全ての線を非表示にする
+        this.linePool.forEach(line => line.visible = false);
+
+        for (const p0 of l0Particles) {
+            for (const p1 of l1Particles) {
+                if (linkCount >= this.maxLinks) break;
+
+                const phaseDiff = Math.abs(p0.coherencePhase - p1.coherencePhase);
+                
+                // 位相差が閾値以下の場合に線を描画
+                if (phaseDiff < threshold) {
+                    this._ensurePool(linkCount + 1);
+                    const line = this.linePool[linkCount];
+                    const positions = line.geometry.attributes.position.array;
+                    
+                    positions[0] = p0.position.x; positions[1] = p0.position.y; positions[2] = p0.position.z;
+                    positions[3] = p1.position.x; positions[4] = p1.position.y; positions[5] = p1.position.z;
+                    
+                    line.geometry.attributes.position.needsUpdate = true;
+                    line.visible = true;
+                    linkCount++;
+                }
+            }
+            if (linkCount >= this.maxLinks) break;
+        }
+    }
+}

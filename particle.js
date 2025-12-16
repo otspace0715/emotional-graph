@@ -119,6 +119,18 @@ class Particle {
 
         this.createLabel(config.name, scene);
     }
+
+    // ⚛️ ジョセフソン効果導入準備: 位相変数を初期化するメソッド
+    initCoherencePhase(pi_n) {
+        if (this.layer === 0) {
+            // L0粒子は初期段階で位相を揃えることを検討 (φ ≈ 0)
+            this.coherencePhase = Math.random() * 0.1; 
+        } else {
+            // L1以降の粒子は、L0の安定定数 π₃ を使って位相空間を定義
+            // Math.PI の代わりに動的な π₃ を使用
+            this.coherencePhase = Math.random() * 2 * pi_n;
+        }
+    }
     
     createLabel(text, scene) {
         const canvas = document.createElement('canvas');
@@ -188,6 +200,28 @@ class Particle {
         // 提案: 過剰な減衰を防ぐため stressDecay を削除 (ユーザー提案)
         this.stress += (stressIncrease + stressTransfer - stressReleased) * dt;
         
+        // ⚛️ ジョセフソン効果: 位相差によるストレス増加 (L1粒子のみ)
+        if (this.layer === 1) {
+            const l0Particles = particles.filter(p => p.layer === 0 && !(p instanceof CoreParticle));
+            if (l0Particles.length > 0) {
+                let avgPhaseDiff = 0;
+                l0Particles.forEach(p0 => {
+                    avgPhaseDiff += Math.abs(this.coherencePhase - p0.coherencePhase);
+                });
+                avgPhaseDiff /= l0Particles.length;
+
+                // 位相差が大きいほどストレスが増加 (Δφ ≈ π で最大)
+                // sin^2(Δφ/2) を使うと、0で最小、πで最大になる
+                const phaseStress = 0.1 * Math.pow(Math.sin(avgPhaseDiff / 2), 2);
+                this.stress += phaseStress * dt;
+            }
+        }
+        // 位相自体の時間発展 (現在は固定)
+        // 将来的に、位相もダイナミクスを持つ可能性がある
+        // const dPhase_dt = ...;
+        // this.coherencePhase += dPhase_dt * dt;
+
+
         // --- 熱伝導の計算 (可逆的・入れ子構造) ---
         const K_Cond = 0.08; // 層間熱伝導係数
         let heatTransfer = 0;
@@ -319,6 +353,27 @@ class Particle {
                         .multiplyScalar(-alpha * π_local);
         force.add(F_pi_n);
 
+        // ⚛️ ジョセフソン結合力 (F_J) の計算
+        // L0粒子とL1粒子間でのみ作用する
+        if (this.layer === 0 || this.layer === 1) {
+            const otherLayer = this.layer === 0 ? 1 : 0;
+            particles.forEach(other => {
+                if (other.layer !== otherLayer || other instanceof CoreParticle) return;
+
+                const diff = other.position.clone().sub(this.position);
+                const distSq = diff.lengthSq();
+                if (distSq < 0.01 || distSq > 225) return; // 相互作用範囲: 15^2
+
+                const deltaPhi = this.coherencePhase - other.coherencePhase;
+                const E_J = globalParams.josephsonEnergy_EJ || 1.0;
+
+                // 力の大きさ: F_J ∝ E_J * cos(Δφ)
+                // cos(Δφ) を使うことで、位相差が0に近いほど引力が強くなる
+                const forceMagnitude = (E_J * Math.cos(deltaPhi)) / distSq;
+                force.add(diff.normalize().multiplyScalar(forceMagnitude));
+            });
+        }
+
         // 5. 量子ゆらぎ (Jitter) - SPEC.md Section 6
         const gamma_n_local = globalParams.Gamma_n_by_layer[this.layer];
         // ゼロ除算を避ける
@@ -409,6 +464,9 @@ class CoreParticle extends Particle {
     }
 
     update(dt, allParticles, core, globalParams) {
+        // ⚛️ 光源の位相は常に0に固定
+        this.coherencePhase = 0.0;
+
         // 1. 位置は常に原点に固定
         this.mesh.position.copy(this.position);
 

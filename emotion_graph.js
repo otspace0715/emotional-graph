@@ -16,7 +16,6 @@ const PARTICLES_CONFIG = {
     l4: [ { name: '調', type: 'flow', color: 0x88DDAA }, { name: '変', type: 'drive', color: 0xAAFF88 }, { name: '静', type: 'freeze', color: 0x88AADD } ],
     l5: [ { name: '観', type: 'flow', color: 0xCCCCFF }, { name: '響', type: 'drive', color: 0xFFCCCC }, { name: '隔', type: 'freeze', color: 0xCCFFCC } ]
 };
-
 // ===== 層構造定義 =====
 const LAYERS = [
     { index: 0, name: '核層', radius: 8, color: 0xFFFFAA, opacity: 0.25 },
@@ -26,10 +25,9 @@ const LAYERS = [
     { index: 4, name: '外部接合層', radius: 40, color: 0x88DDAA, opacity: 0.15 },
     { index: 5, name: '外部雰囲気層', radius: 50, color: 0xCCCCFF, opacity: 0.12 }
 ];
-
 // ===== Global variables =====
 let scene, camera, renderer;
-let particles = [], weather, externalAuraCloud;
+let particles = [], weather, externalAuraCloud, coherenceLinkManager;
 
 const globalParams = {
   // Physics parameters
@@ -50,9 +48,11 @@ const globalParams = {
   pi_n_average: 0,
   maxInfluenceIndex: 0, // E-1: K_EM計算用に最大影響度指数を格納
   avg_temp_by_layer: [], // 層ごとの平均温度を格納
-  avg_stress_by_layer: [] // 層ごとの平均ストレスを格納
+  avg_stress_by_layer: [], // 層ごとの平均ストレスを格納
+  avg_phase_diff_L0_L1: 0, // ⚛️ L0-L1間の平均位相差
+  josephsonEnergy_EJ: 1.0, // ⚛️ ジョセフソン結合エネルギー (動的に更新)
+  coherenceThreshold: 0.5 // ⚛️ 位相線を描画する位相差の閾値
 };
-
 // U-1: Timeline-related global variables
 let timelineData = null;
 let simulationStartTime = 0;
@@ -61,7 +61,6 @@ let nextKeyframeIndex = 0;
 let wpm = 400; // Words Per Minute
 
 let lastTime = Date.now();
-
 function init() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x050510);
@@ -74,10 +73,10 @@ function init() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     document.getElementById('container').appendChild(renderer.domElement);
-
     drawLayerBoundaries();
     weather = new AuraWeather(scene);
     externalAuraCloud = new ExternalAuraCloud(scene); // Add this line
+    coherenceLinkManager = new CoherenceLinkManager(scene); // ⚛️ 位相線マネージャーを初期化
     createParticles();
 
     const ambientLight = new THREE.AmbientLight(0x333355, 0.5);
@@ -85,7 +84,6 @@ function init() {
     const dirLight = new THREE.DirectionalLight(0xFFFFFF, 0.3);
     dirLight.position.set(10, 20, 10);
     scene.add(dirLight);
-
     setupMouseControls();
     setupUIToggle();
     setupEmotionControls();
@@ -98,10 +96,8 @@ function init() {
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
-
     animate();
 }
-
 function drawLayerBoundaries() {
     LAYERS.forEach(layer => {
         const geom = new THREE.SphereGeometry(layer.radius, 32, 32);
@@ -112,7 +108,6 @@ function drawLayerBoundaries() {
         scene.add(new THREE.Mesh(wireGeom, wireMat));
     });
 }
-
 function createParticles() {
     Object.keys(PARTICLES_CONFIG).forEach((layerKey, idx) => {
         const outerRadius = LAYERS[idx].radius;
@@ -128,12 +123,21 @@ function createParticles() {
             particles.push(new Particle(config, idx, initialRadius, baseRadius, scene));
         });
     });
-
     // 19番目の粒子「光体」を生成し、配列の先頭に追加
     const coreParticle = new CoreParticle(scene);
     particles.unshift(coreParticle);
-}
 
+    // ⚛️ ジョセフソン効果導入準備: π₃ を使って位相を初期化
+    // 最初のDDD計算を実行して、pi_n_by_layerを初期化する
+    updateGlobalDDD(particles, globalParams); 
+    particles.forEach(p => {
+        // ⚛️ 各層のπ_nを使って位相を初期化する
+        if (p.initCoherencePhase) {
+            const pi_n_for_layer = globalParams.pi_n_by_layer[p.layer] || Math.PI;
+            p.initCoherencePhase(pi_n_for_layer);
+        }
+    });
+}
 function setupMouseControls() {
     let isDragging = false;
     renderer.domElement.addEventListener('mousedown', (e) => { if (e.target === renderer.domElement) isDragging = true; });
@@ -152,7 +156,6 @@ function setupMouseControls() {
         camera.position.z = Math.max(30, Math.min(150, camera.position.z + e.deltaY * 0.05));
     });
 }
-
 function setupUIToggle() {
     const footer = document.getElementById('fixed-footer'), button = document.getElementById('toggle-button'), icon = document.getElementById('toggle-icon');
     button.addEventListener('click', () => {
@@ -161,7 +164,6 @@ function setupUIToggle() {
         button.setAttribute('aria-expanded', String(!isCollapsed));
     });
 }
-
 function setupDebugToggle() {
     const button = document.getElementById('toggle-debug-button');
     const container = document.getElementById('debug-stats-container');
@@ -171,7 +173,6 @@ function setupDebugToggle() {
         button.textContent = isHidden ? 'デバッグ非表示' : 'デバッグ表示';
     });
 }
-
 function setupWpmSlider() {
     const slider = document.getElementById('wpm-slider');
     const valueDisplay = document.getElementById('wpm-value');
@@ -180,7 +181,6 @@ function setupWpmSlider() {
         valueDisplay.textContent = wpm;
     });
 }
-
 function setupEmotionControls() {
     document.querySelectorAll('.emotion-button').forEach(button => {
         button.addEventListener('click', () => {
@@ -214,7 +214,6 @@ function setupEmotionControls() {
         });
     });
 }
-
 function setupToonInput() {
     document.getElementById('apply-prompt-button').addEventListener('click', () => {
         const toonString = document.getElementById('json-input-area').value, statusElement = document.getElementById('input-status-message');
@@ -228,7 +227,6 @@ function setupToonInput() {
         }
     });
 }
-
 function parseToonInput(toonString) {
     // U-1: Advanced TOON Parser
     if (!toonString || toonString.trim() === "") throw new Error("TOON入力が空です。");
@@ -324,7 +322,6 @@ function parseToonInput(toonString) {
     if (!result.metadata || !Array.isArray(result.metadata)) throw new Error("TOON形式にはトップレベルの`metadata`配列が必要です。");
     return result;
 }
-
 function resetSimulation(params) {
     // U-1: Reset timeline state
     timelineData = null;
@@ -359,7 +356,6 @@ function resetSimulation(params) {
         document.querySelector('#calm').click();
     }
 }
-
 function animate() {
     requestAnimationFrame(animate);
     // この更新はループの先頭で必ず行う
@@ -462,6 +458,42 @@ function animate() {
     globalParams.avg_temp_by_layer = avgTemps;
     globalParams.avg_stress_by_layer = avgStresses;
 
+    // ⚛️ ジョセフソンエネルギー E_J の動的計算
+    // L0層の平均質量と平均ストレスから「意志の強さ」をモデル化する
+    const l0ParticlesForEJ = particles.filter(p => p.layer === 0 && !(p instanceof CoreParticle));
+    if (l0ParticlesForEJ.length > 0) {
+        const avg_massEff_L0 = l0ParticlesForEJ.reduce((sum, p) => sum + p.massEff, 0) / l0ParticlesForEJ.length;
+        const avg_stress_L0 = globalParams.avg_stress_by_layer[0] || 0;
+
+        const E_J_base = 0.5; // 基本エネルギー
+        const k_m = 1.0;      // 質量係数
+        const k_s = 1.5;      // ストレス係数
+
+        // E_J = E_J_base * (1 + k_m * avg_massEff) * (1 + k_s * avg_stress)
+        const dynamic_EJ = E_J_base * (1 + k_m * avg_massEff_L0) * (1 + k_s * avg_stress_L0);
+        
+        globalParams.josephsonEnergy_EJ = Math.max(0.1, Math.min(dynamic_EJ, 10.0)); // 値が発散しないように制限
+    }
+
+    // ⚛️ L0-L1間の平均位相差を計算
+    const l0Particles = particles.filter(p => p.layer === 0);
+    const l1Particles = particles.filter(p => p.layer === 1);
+    if (l0Particles.length > 0 && l1Particles.length > 0) {
+        let totalPhaseDiff = 0;
+        let pairCount = 0;
+        for (const p0 of l0Particles) {
+            for (const p1 of l1Particles) {
+                totalPhaseDiff += Math.abs(p0.coherencePhase - p1.coherencePhase);
+                pairCount++;
+            }
+        }
+        globalParams.avg_phase_diff_L0_L1 = totalPhaseDiff / pairCount;
+    }
+
+    // ⚛️ 量子位相線の更新
+    const l0ParticlesForLink = particles.filter(p => p.layer === 0);
+    coherenceLinkManager.update(l0ParticlesForLink, l1Particles, globalParams.coherenceThreshold);
+
     updateGlobalDDD(particles, globalParams);
     
     // 光体（particles[0]）は他の粒子に影響を与えるため、最初に更新
@@ -533,13 +565,13 @@ function animate() {
         document.getElementById('magnetic-mass').textContent = coreParticle.massEff.toFixed(3);
     }
 
+    document.getElementById('josephson-energy').textContent = (globalParams.josephsonEnergy_EJ || 0).toFixed(3);
     document.getElementById('system-potential').textContent = (globalParams.systemPotential_Sn_total || 0).toFixed(3);
 
     updateUI();
     camera.lookAt(0, 0, 0);
     renderer.render(scene, camera);
 }
-
 function updateUI() {
     const { pi_n_by_layer, rho_n_by_layer, Gamma_n_by_layer, systemPotential_Sn_total, season, internalAuraWeather, pi_n_average, dominantEmotion, brainwaveState } = globalParams;
 
@@ -551,6 +583,7 @@ function updateUI() {
     document.getElementById('avg-pi-n').textContent = (globalParams.pi_n_average || 0).toFixed(4);
     document.getElementById('dominant-emotion').textContent = dominantEmotion;
     document.getElementById('brainwave-state').textContent = brainwaveState;
+    document.getElementById('avg-phase-diff').textContent = (globalParams.avg_phase_diff_L0_L1 || 0).toFixed(3);
 
     // Determine display weather from display params
     let displayAuraWeather;
