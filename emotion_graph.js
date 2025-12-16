@@ -541,10 +541,19 @@ function animate() {
 
             nonCoreParticles.forEach(p => {
                 // 影響度指数 = (相対温度) * (ストレスの低さ) * (質量の大きさ)
-                // 温度が高く、ストレスが低く、質量が大きいほど影響力が強いと定義
                 const relativeTemp = p.temperature / (avgTemp + 1e-6);
                 const stressFactor = 1.0 - p.stress;
-                const influenceIndex = relativeTemp * stressFactor * p.massEff;
+                let influenceIndex = relativeTemp * stressFactor * p.massEff;
+
+                // U-3: 判定ロジックの高度化 - 位相コヒーレンスを考慮
+                // L1粒子の場合、L0との位相差が小さいほど影響力を増す
+                if (p.layer === 1) {
+                    // avg_phase_diff_L0_L1 は 0 (完全同期) から π (完全逆相) の範囲を想定
+                    // (1 - Δφ/π) で正規化し、同期しているほど係数が1に近づくようにする
+                    const coherenceFactor = 1.0 - (globalParams.avg_phase_diff_L0_L1 / Math.PI);
+                    // 位相コヒーレンス係数を影響度に加味 (0.5を足して、影響が0にならないように調整)
+                    influenceIndex *= (0.5 + 0.5 * Math.max(0, coherenceFactor));
+                }
 
                 if (influenceIndex > maxInfluenceIndex) {
                     maxInfluenceIndex = influenceIndex;

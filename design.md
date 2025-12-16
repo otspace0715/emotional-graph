@@ -73,7 +73,7 @@
 
       | 力の方向 | 構成要素 |
       |----------|----------|
-      | 内向き（引力） | 創発重力 \( \mathbf{F}_{\text{Gravity}} \)、L6からの外部潮汐力 \( \mathbf{F}_{\text{Tidal}} \)。 |
+      | 内向き（引力） | 創発重力 \( \mathbf{F}_{\text{Gravity}} \)、**隣接層から伝播する**外部潮汐力 \( \mathbf{F}_{\text{Tidal}} \)。 |
       | 外向き（斥力） | 粒子の熱活性度 T による熱圧 \( \mathbf{P}_{\text{Thermal}} \)（流体力学的駆動力 \( \mathbf{F}_{\text{Drive}} \) の一部）、量子斥力 \( \mathbf{F}_{\text{Repulsion}} \)。 |
 
    c. **幾何学的変化の平均有効質量 \( \bar{m}_{\text{eff}} \) による表現**  

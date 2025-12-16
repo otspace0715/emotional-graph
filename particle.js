@@ -353,6 +353,25 @@ class Particle {
                         .multiplyScalar(-alpha * π_local);
         force.add(F_pi_n);
 
+        // U-2 / P-4: 潮汐力（剪断応力）のモデル化（修正版）
+        // L6からの直接作用ではなく、隣接する層との速度差（ズレ）から力を発生させる
+        if (this.layer === 2 || this.layer === 4) {
+            const outerLayerIndex = this.layer + 1;
+            const outerLayerParticles = particles.filter(p => p.layer === outerLayerIndex);
+
+            if (outerLayerParticles.length > 0) {
+                // 隣接する外側の層の平均速度を計算
+                const avgVelocityOuter = new THREE.Vector3();
+                outerLayerParticles.forEach(p => avgVelocityOuter.add(p.velocity));
+                avgVelocityOuter.divideScalar(outerLayerParticles.length);
+
+                // 自身の速度と外層の平均速度との差分が、剪断応力（引きずる力）となる
+                const shearForce = avgVelocityOuter.sub(this.velocity);
+                const shearStrength = 0.1; // 剪断応力の結合強度
+                force.add(shearForce.multiplyScalar(shearStrength));
+            }
+        }
+
         // ⚛️ ジョセフソン結合力 (F_J) の計算
         // L0粒子とL1粒子間でのみ作用する
         if (this.layer === 0 || this.layer === 1) {
