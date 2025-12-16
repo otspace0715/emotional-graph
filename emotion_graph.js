@@ -285,7 +285,7 @@ function parseToonInput(toonString) {
             const parent = getRef(result, arrayPath);
             if (!Array.isArray(parent[arrayKey])) parent[arrayKey] = [];
             parent[arrayKey].push({});
-            path[path.length] = parent[arrayKey].length - 1;
+            path.push(parent[arrayKey].length - 1); // Correctly update path for the new object
             const itemContent = content.substring(1).trim();
             if (itemContent) {
                  const [key, value] = itemContent.split(/:(.*)/s).map(s => s.trim());
@@ -374,10 +374,20 @@ function animate() {
             
             // 動的なタイムスタンプ計算
             // 読了時間 = (文字数 / WPM) * 60秒
-            const textToRead = segment.source_text.substring(0, keyframe.highlight_range[1]);
-            // 日本語は1文字を1単語と近似的に扱う
-            const wordCount = textToRead.length; 
-            const timestampSeconds = (wordCount / wpm) * 60;
+            let timestampSeconds = 0;
+            if (keyframe.highlight_range && segment.source_text) {
+                const textToRead = segment.source_text.substring(0, keyframe.highlight_range[1]);
+                // 日本語は1文字を1単語と近似的に扱う
+                const wordCount = textToRead.length; 
+                timestampSeconds = (wordCount / wpm) * 60;
+            } else {
+                // highlight_rangeがない場合、前のキーフレームから一定時間後とする
+                const prevKeyframeIndex = Math.max(0, nextKeyframeIndex - 1);
+                const prevKeyframe = segment.timeline[prevKeyframeIndex];
+                // A small fixed duration is added if the previous keyframe also lacks timing info.
+                timestampSeconds = ((prevKeyframe.timestampSeconds || 0) + 3); 
+            }
+            keyframe.timestampSeconds = timestampSeconds; // Store calculated time for next frame
             
             const elapsedTime = (Date.now() - simulationStartTime) / 1000;
             if (elapsedTime >= timestampSeconds) {
@@ -402,7 +412,7 @@ function animate() {
                 }
                 
                 // Update UI text highlight
-                if (segment.source_text && keyframe.highlight_range) {
+                if (segment.source_text && keyframe.highlight_range && keyframe.highlight_range.length === 2) {
                     const text = segment.source_text;
                     const [start, end] = keyframe.highlight_range;
                     const highlightedText = text.substring(0, start) + `<span class="highlight">${text.substring(start, end)}</span>` + text.substring(end);
@@ -411,10 +421,10 @@ function animate() {
                 nextKeyframeIndex++;
             }
         } else {
-            // Current segment's timeline is finished, try to move to the next segment
+            // 現在のセグメントのタイムラインが終了。次のセグメントに移行する。
             currentSegmentIndex++;
             if (timelineData.metadata[currentSegmentIndex]) {
-                // Reset for the new segment
+                // 次のセグメントの準備
                 nextKeyframeIndex = 0;
                 simulationStartTime = Date.now(); // タイマーをリセット
                 const newSegment = timelineData.metadata[currentSegmentIndex];
