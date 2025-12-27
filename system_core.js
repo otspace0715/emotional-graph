@@ -45,13 +45,12 @@ function determineSystemState(l5Particles) {
     const avgTemp = l5Particles.reduce((s, p) => s + p.temperature, 0) / l5Particles.length;
     const avgStress = l5Particles.reduce((s, p) => s + p.stress, 0) / l5Particles.length;
 
-    // 定義パラメータ
-    const T_HIGH = 0.7;  // β/αの境界
-    const T_MID = 0.55;  // α/θの境界
-    const T_LOW = 0.5;   // θ/δの境界を少し引き上げ
-
-    const S_HIGH = 0.4;  // 怒の境界
-    const S_MID = 0.25;  // 楽/喜の境界
+    // 定義パラメータ - エネルギー安定化後の現実に即した値に再調整
+    const T_HIGH = 0.8;  // β/αの境界
+    const T_MID = 0.6;  // α/θの境界
+    const T_LOW = 0.45;   // θ/δの境界
+    const S_HIGH = 0.5;  // 怒の境界
+    const S_MID = 0.2;  // 楽/喜の境界
 
     // 時間変化率を計算
     const tempChangeRate = avgTemp - lastL5AverageTemp;

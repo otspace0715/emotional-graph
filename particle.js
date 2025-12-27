@@ -202,19 +202,15 @@ class Particle {
         
         // ⚛️ ジョセフソン効果: 位相差によるストレス増加 (L1粒子のみ)
         if (this.layer === 1) {
-            const l0Particles = particles.filter(p => p.layer === 0 && !(p instanceof CoreParticle));
-            if (l0Particles.length > 0) {
-                let avgPhaseDiff = 0;
-                l0Particles.forEach(p0 => {
-                    avgPhaseDiff += Math.abs(this.coherencePhase - p0.coherencePhase);
-                });
-                avgPhaseDiff /= l0Particles.length;
+            // L0層の平均位相をglobalParamsから取得 (emotion_graph.jsで計算済み)
+            const avgPhaseL0 = globalParams.avg_phase_L0 || 0;
+            const deltaPhi = this.coherencePhase - avgPhaseL0;
 
-                // 位相差が大きいほどストレスが増加 (Δφ ≈ π で最大)
-                // sin^2(Δφ/2) を使うと、0で最小、πで最大になる
-                const phaseStress = 0.1 * Math.pow(Math.sin(avgPhaseDiff / 2), 2);
-                this.stress += phaseStress * dt;
-            }
+            // 位相差が大きいほどストレスが増加 (Δφ ≈ π で最大)
+            // SPEC.md 4.6.4:  σ̇ ∝ sin²(Δφ/2)
+            const K_Phase_Stress = 0.15; // 位相ストレス係数を調整
+            const phaseStress = K_Phase_Stress * Math.pow(Math.sin(deltaPhi / 2), 2);
+            this.stress += phaseStress * dt; // ★dtを乗算する修正を適用
         }
         // 位相自体の時間発展 (現在は固定)
         // 将来的に、位相もダイナミクスを持つ可能性がある
@@ -237,6 +233,14 @@ class Particle {
             const T_avg_inner = globalParams.avg_temp_by_layer[this.layer - 1];
             heatTransfer = K_Cond * (T_avg_inner - this.temperature);
         }
+
+        // U-2.1: 外部オーラと剪断応力の連動
+        // L5粒子は外部環境(globalExternalStress)から直接熱エネルギーを得る
+        let externalStressHeating = 0;
+        if (this.layer === 5) {
+            const K_External_Stress_Heat = 0.1; // 外部ストレスからの熱変換係数
+            externalStressHeating = K_External_Stress_Heat * globalParams.globalExternalStress;
+        }
         
         // 提案: 運動エネルギーからの加熱（Speed Factor）の抑制
         const speedFactor = Math.max(0, 0.01 * (this.velocity.length() - (this.type === 'drive' ? 0.8 : (this.type === 'flow' ? 0.9 : 1.05))));
@@ -244,12 +248,12 @@ class Particle {
         const K_Stress_Heat_Conversion = 0.08; // 熱源を強化
         const stressHeating = this.stress * K_Stress_Heat_Conversion;
         
-        // 提案: 輻射冷却（熱損失）
-        const K_Radiation = 0.06; // 冷却係数を再調整
-        const radiativeCooling = -K_Radiation * Math.pow(this.temperature, 2);
+        // 提案: 輻射冷却（熱損失）- シュテファン＝ボルツマンの法則(T⁴)に近づける
+        const K_Radiation = 0.01; // T⁴に比例するため、係数を大幅に下げる
+        const radiativeCooling = -K_Radiation * Math.pow(this.temperature, 4);
 
         // 温度を更新
-        this.temperature += (speedFactor + stressHeating + radiativeCooling + heatTransfer) * dt;
+        this.temperature += (speedFactor + stressHeating + radiativeCooling + heatTransfer + externalStressHeating) * dt;
         this.temperature = Math.max(0.1, this.temperature); // 物理的な最低温度を保証
 
         // --- 提案: 時間変化率に基づいて質量を動的に調整 ---
@@ -323,11 +327,6 @@ class Particle {
         
         let boundaryForceScalar = boundaryForceFactor * displacement;
 
-        // 中心引力の半分を、外側への引力(displacement < 0 の場合)に加える
-        if (displacement < 0) {
-            boundaryForceScalar -= 0.5 * centralForceMagnitude;
-        }
-
         const boundaryForceVec = radialDir.multiplyScalar(boundaryForceScalar);
         force.add(boundaryForceVec);
         this.debug_boundaryForce = boundaryForceVec.length(); // Store for UI
@@ -372,23 +371,39 @@ class Particle {
             }
         }
 
-        // ⚛️ ジョセフソン結合力 (F_J) の計算
+        // ⚛️ ジョセフソン結合力 (F_J) の計算 (SPEC.md 4.6.3)
         // L0粒子とL1粒子間でのみ作用する
         if (this.layer === 0 || this.layer === 1) {
-            const otherLayer = this.layer === 0 ? 1 : 0;
+            const otherLayerIndex = (this.layer === 0) ? 1 : 0;
             particles.forEach(other => {
-                if (other.layer !== otherLayer || other instanceof CoreParticle) return;
+                if (other.layer !== otherLayerIndex || other instanceof CoreParticle) return;
 
                 const diff = other.position.clone().sub(this.position);
                 const distSq = diff.lengthSq();
-                if (distSq < 0.01 || distSq > 225) return; // 相互作用範囲: 15^2
+                // 相互作用範囲を限定 (近すぎず遠すぎず)
+                if (distSq < 1.0 || distSq > 400) return; // 20^2
 
+                // 位相差 Δφ を計算
                 const deltaPhi = this.coherencePhase - other.coherencePhase;
-                const E_J = globalParams.josephsonEnergy_EJ || 1.0;
+                
+                // ジョセフソン結合エネルギー E_J をグローバルパラメータから取得
+                const E_J = globalParams.josephsonEnergy_EJ || 0.1;
 
-                // 力の大きさ: F_J ∝ E_J * cos(Δφ)
-                // cos(Δφ) を使うことで、位相差が0に近いほど引力が強くなる
-                const forceMagnitude = (E_J * Math.cos(deltaPhi)) / distSq;
+                // 力の大きさ: F_J = k * E_J * cos(Δφ) / r²
+                const K_Josephson = 2.0;
+                let forceMagnitude = (K_Josephson * E_J * Math.cos(deltaPhi)) / distSq;
+
+                // 引力が強すぎて粒子が中心に落ち込む問題への最終対策
+                // 引力と斥力に非対称な係数をかける
+                if (forceMagnitude > 0) { // 引力の場合
+                    forceMagnitude *= 0.2; // 効果を80%カットし、引き込みすぎを防ぐ
+                } else { // 斥力の場合
+                    forceMagnitude *= 1.2; // 逆位相を解消する力を少し強める
+                }
+
+                // 計算された力の大きさを妥当な範囲にクランプする
+                forceMagnitude = THREE.MathUtils.clamp(forceMagnitude, -5.0, 5.0);
+                
                 force.add(diff.normalize().multiplyScalar(forceMagnitude));
             });
         }

@@ -475,6 +475,16 @@ function animate() {
         globalParams.josephsonEnergy_EJ = Math.max(0.1, Math.min(dynamic_EJ, 10.0)); // 値が発散しないように制限
     }
 
+    // ⚛️ L0層の平均位相を計算 (particle.jsの位相ストレス計算で使用)
+    const l0ParticlesForPhase = particles.filter(p => p.layer === 0 && !(p instanceof CoreParticle));
+    if (l0ParticlesForPhase.length > 0) {
+        // 単純な算術平均で計算
+        const totalPhaseL0 = l0ParticlesForPhase.reduce((sum, p) => sum + p.coherencePhase, 0);
+        globalParams.avg_phase_L0 = totalPhaseL0 / l0ParticlesForPhase.length;
+    } else {
+        globalParams.avg_phase_L0 = 0;
+    }
+
     // ⚛️ L0-L1間の平均位相差を計算
     const l0Particles = particles.filter(p => p.layer === 0);
     const l1Particles = particles.filter(p => p.layer === 1);
@@ -540,15 +550,23 @@ function animate() {
             const avgStress = nonCoreParticles.reduce((s, p) => s + p.stress, 0) / nonCoreParticles.length;
 
             nonCoreParticles.forEach(p => {
-                // 影響度指数 = (相対温度) * (ストレスの低さ) * (質量の大きさ)
+                // 影響度指数 = (相対温度) * (ストレスの低さ) * (質量の大きさ) * (安定性)
                 const relativeTemp = p.temperature / (avgTemp + 1e-6);
-                const stressFactor = 1.0 - p.stress;
+                const stressFactor = Math.max(0, 1.0 - p.stress); // ストレスが高い場合に影響度が負になるのを防ぐ
                 let influenceIndex = relativeTemp * stressFactor * p.massEff;
 
-                // U-3: 判定ロジックの高度化 - 位相コヒーレンスを考慮
+                // U-3.2: SPEC.mdに基づき、幾何学的影響因子(Γ_n)を影響度指数に導入
+                const gamma_n = globalParams.Gamma_n_by_layer[p.layer] || 0;
+                // SPEC.md定義: f(T,S,m) * (1 + k * Γ_n)
+                const k = 1.0; // Γ_nの影響度を調整する係数
+                const geometricFactor = 1.0 + k * gamma_n;
+                influenceIndex *= geometricFactor;
+
+
+                // U-3.1: 判定ロジックの高度化 - 位相コヒーレンスを考慮
                 // L1粒子の場合、L0との位相差が小さいほど影響力を増す
                 if (p.layer === 1) {
-                    // avg_phase_diff_L0_L1 は 0 (完全同期) から π (完全逆相) の範囲を想定
+                    // avg_phase_diff_L0_L1 は 0 (完全同期) から 2π (完全逆相) の範囲を想定
                     // (1 - Δφ/π) で正規化し、同期しているほど係数が1に近づくようにする
                     const coherenceFactor = 1.0 - (globalParams.avg_phase_diff_L0_L1 / Math.PI);
                     // 位相コヒーレンス係数を影響度に加味 (0.5を足して、影響が0にならないように調整)
